@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@
 #include <chrono>
 
 #include <folly/detail/MemoryIdler.h>
-#include <folly/fibers/FiberManager.h>
+#include <folly/fibers/FiberManagerInternal.h>
 #include <folly/portability/Asm.h>
 
 namespace folly {
@@ -57,7 +57,8 @@ void Baton::waitThread() {
           fiber == NO_WAITER &&
           waitingFiber_.compare_exchange_strong(fiber, THREAD_WAITING))) {
     do {
-      folly::detail::MemoryIdler::futexWait(futex_.futex, THREAD_WAITING);
+      folly::detail::MemoryIdler::futexWait(
+          futex_.futex, uint32_t(THREAD_WAITING));
       fiber = waitingFiber_.load(std::memory_order_acquire);
     } while (fiber == THREAD_WAITING);
   }
@@ -109,7 +110,7 @@ bool Baton::timedWaitThread(TimeoutController::Duration timeout) {
     auto deadline = TimeoutController::Clock::now() + timeout;
     do {
       const auto wait_rv =
-          futex_.futex.futexWaitUntil(THREAD_WAITING, deadline);
+          futex_.futex.futexWaitUntil(uint32_t(THREAD_WAITING), deadline);
       if (wait_rv == folly::detail::FutexResult::TIMEDOUT) {
         return false;
       }
@@ -151,7 +152,7 @@ void Baton::postHelper(intptr_t new_value) {
   } while (!waitingFiber_.compare_exchange_weak(fiber, new_value));
 
   if (fiber != NO_WAITER) {
-    reinterpret_cast<Fiber*>(fiber)->setData(0);
+    reinterpret_cast<Fiber*>(fiber)->resume();
   }
 }
 

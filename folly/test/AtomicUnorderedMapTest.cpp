@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,10 +20,9 @@
 #include <thread>
 #include <unordered_map>
 
-#include <gtest/gtest.h>
-
 #include <folly/Benchmark.h>
 #include <folly/portability/GFlags.h>
+#include <folly/portability/GTest.h>
 #include <folly/test/DeterministicSchedule.h>
 
 using namespace folly;
@@ -276,7 +275,7 @@ void contendedRW(size_t itersPerThread,
               if (!pr.second) {
                 pr.first->second.data++;
               }
-            } catch (std::bad_alloc& x) {
+            } catch (std::bad_alloc&) {
               LOG(INFO) << "bad alloc";
             }
           }
@@ -397,7 +396,7 @@ BENCHMARK(fast_map_64) {
 
 int main(int argc, char ** argv) {
   testing::InitGoogleTest(&argc, argv);
-  google::ParseCommandLineFlags(&argc, &argv, true);
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
   int rv = RUN_ALL_TESTS();
   folly::runBenchmarksOnFlag();
   return rv;

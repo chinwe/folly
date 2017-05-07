@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,9 +29,16 @@
 #include <boost/intrusive/list.hpp>
 #include <glog/logging.h>
 
+#include <folly/Hash.h>
+#include <folly/Range.h>
 #include <folly/experimental/symbolizer/Elf.h>
 
 namespace folly { namespace symbolizer {
+
+/**
+ * Number of ELF files loaded by the dynamic loader.
+ */
+size_t countLoadedElfFiles();
 
 class ElfCacheBase {
  public:
@@ -63,9 +70,19 @@ class SignalSafeElfCache : public ElfCacheBase {
   // own wrapper around a fixed-size, null-terminated string.
   class Path : private boost::totally_ordered<Path> {
    public:
+    Path() {
+      assign(folly::StringPiece());
+    }
+
     explicit Path(StringPiece s) {
+      assign(s);
+    }
+
+    void assign(StringPiece s) {
       DCHECK_LE(s.size(), kMaxSize);
-      memcpy(data_, s.data(), s.size());
+      if (!s.empty()) {
+        memcpy(data_, s.data(), s.size());
+      }
       data_[s.size()] = '\0';
     }
 
@@ -87,6 +104,7 @@ class SignalSafeElfCache : public ElfCacheBase {
     char data_[kMaxSize + 1];
   };
 
+  Path scratchpad_; // Preallocated key for map_ lookups.
   boost::container::flat_map<Path, int> map_;
   std::vector<std::shared_ptr<ElfFile>> slots_;
 };
@@ -116,10 +134,7 @@ class ElfCache : public ElfCacheBase {
   static std::shared_ptr<ElfFile> filePtr(const std::shared_ptr<Entry>& e);
 
   size_t capacity_;
-  std::unordered_map<
-    StringPiece,
-    std::shared_ptr<Entry>,
-    StringPieceHash> files_;
+  std::unordered_map<StringPiece, std::shared_ptr<Entry>, Hash> files_;
 
   typedef boost::intrusive::list<
       Entry,

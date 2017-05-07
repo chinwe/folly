@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
  */
 #include <boost/thread/barrier.hpp>
 #include <folly/experimental/FutureDAG.h>
-#include <gtest/gtest.h>
+#include <folly/portability/GTest.h>
 
 using namespace folly;
 
@@ -255,8 +255,8 @@ TEST_F(FutureDAGTest, DestroyBeforeComplete) {
   auto barrier = std::make_shared<boost::barrier>(2);
   Future<Unit> f;
   {
-    auto dag = FutureDAG::create();
-    auto h1 = dag->add([barrier] {
+    auto localDag = FutureDAG::create();
+    auto h1 = localDag->add([barrier] {
       auto p = std::make_shared<Promise<Unit>>();
       std::thread t([p, barrier] {
         barrier->wait();
@@ -265,9 +265,9 @@ TEST_F(FutureDAGTest, DestroyBeforeComplete) {
       t.detach();
       return p->getFuture();
     });
-    auto h2 = dag->add(makeFutureFunc);
-    dag->dependency(h1, h2);
-    f = dag->go();
+    auto h2 = localDag->add(makeFutureFunc);
+    localDag->dependency(h1, h2);
+    f = localDag->go();
   }
   barrier->wait();
   ASSERT_NO_THROW(f.get());

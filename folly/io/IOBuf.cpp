@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -163,7 +163,7 @@ void IOBuf::releaseStorage(HeapStorage* storage, uint16_t freeFlags) {
   DCHECK_EQ((flags & freeFlags), freeFlags);
 
   while (true) {
-    uint16_t newFlags = (flags & ~freeFlags);
+    uint16_t newFlags = uint16_t(flags & ~freeFlags);
     if (newFlags == 0) {
       // The storage space is now unused.  Free it.
       storage->prefix.HeapPrefix::~HeapPrefix();
@@ -210,8 +210,11 @@ IOBuf::IOBuf(CopyBufferOp /* op */,
              uint64_t minTailroom)
     : IOBuf(CREATE, headroom + size + minTailroom) {
   advance(headroom);
-  memcpy(writableData(), buf, size);
-  append(size);
+  if (size > 0) {
+    assert(buf != nullptr);
+    memcpy(writableData(), buf, size);
+    append(size);
+  }
 }
 
 IOBuf::IOBuf(CopyBufferOp op, ByteRange br,
@@ -247,7 +250,7 @@ unique_ptr<IOBuf> IOBuf::createCombined(uint64_t capacity) {
 
   uint8_t* bufAddr = reinterpret_cast<uint8_t*>(&storage->align);
   uint8_t* storageEnd = reinterpret_cast<uint8_t*>(storage) + mallocSize;
-  size_t actualCapacity = storageEnd - bufAddr;
+  size_t actualCapacity = size_t(storageEnd - bufAddr);
   unique_ptr<IOBuf> ret(new (&storage->hs.buf) IOBuf(
         InternalConstructor(), packFlagsAndSharedInfo(0, &storage->shared),
         bufAddr, actualCapacity, bufAddr, 0));
@@ -510,6 +513,10 @@ unique_ptr<IOBuf> IOBuf::cloneOne() const {
   return make_unique<IOBuf>(cloneOneAsValue());
 }
 
+unique_ptr<IOBuf> IOBuf::cloneCoalesced() const {
+  return make_unique<IOBuf>(cloneCoalescedAsValue());
+}
+
 IOBuf IOBuf::cloneAsValue() const {
   auto tmp = cloneOneAsValue();
 
@@ -534,6 +541,36 @@ IOBuf IOBuf::cloneOneAsValue() const {
       length_);
 }
 
+IOBuf IOBuf::cloneCoalescedAsValue() const {
+  if (!isChained()) {
+    return cloneOneAsValue();
+  }
+  // Coalesce into newBuf
+  const uint64_t newLength = computeChainDataLength();
+  const uint64_t newHeadroom = headroom();
+  const uint64_t newTailroom = prev()->tailroom();
+  const uint64_t newCapacity = newLength + newHeadroom + newTailroom;
+  IOBuf newBuf{CREATE, newCapacity};
+  newBuf.advance(newHeadroom);
+
+  auto current = this;
+  do {
+    if (current->length() > 0) {
+      DCHECK_NOTNULL(current->data());
+      DCHECK_LE(current->length(), newBuf.tailroom());
+      memcpy(newBuf.writableTail(), current->data(), current->length());
+      newBuf.append(current->length());
+    }
+    current = current->next();
+  } while (current != this);
+
+  DCHECK_EQ(newLength, newBuf.length());
+  DCHECK_EQ(newHeadroom, newBuf.headroom());
+  DCHECK_LE(newTailroom, newBuf.tailroom());
+
+  return newBuf;
+}
+
 void IOBuf::unshareOneSlow() {
   // Allocate a new buffer for the data
   uint8_t* buf;
@@ -545,7 +582,10 @@ void IOBuf::unshareOneSlow() {
   // Maintain the same amount of headroom.  Since we maintained the same
   // minimum capacity we also maintain at least the same amount of tailroom.
   uint64_t headlen = headroom();
-  memcpy(buf + headlen, data_, length_);
+  if (length_ > 0) {
+    assert(data_ != nullptr);
+    memcpy(buf + headlen, data_, length_);
+  }
 
   // Release our reference on the old buffer
   decrementRefcount();
@@ -666,10 +706,13 @@ void IOBuf::coalesceAndReallocate(size_t newHeadroom,
   IOBuf* current = this;
   size_t remaining = newLength;
   do {
-    assert(current->length_ <= remaining);
-    remaining -= current->length_;
-    memcpy(p, current->data_, current->length_);
-    p += current->length_;
+    if (current->length_ > 0) {
+      assert(current->length_ <= remaining);
+      assert(current->data_ != nullptr);
+      remaining -= current->length_;
+      memcpy(p, current->data_, current->length_);
+      p += current->length_;
+    }
     current = current->next_;
   } while (current != end);
   assert(remaining == 0);
@@ -810,7 +853,10 @@ void IOBuf::reserveSlow(uint64_t minHeadroom, uint64_t minTailroom) {
       throw std::bad_alloc();
     }
     newBuffer = static_cast<uint8_t*>(p);
-    memcpy(newBuffer + minHeadroom, data_, length_);
+    if (length_ > 0) {
+      assert(data_ != nullptr);
+      memcpy(newBuffer + minHeadroom, data_, length_);
+    }
     if (sharedInfo()) {
       freeExtBuffer();
     }
@@ -886,7 +932,7 @@ void IOBuf::initExtBuffer(uint8_t* buf, size_t mallocSize,
   uint8_t* infoStart = (buf + mallocSize) - sizeof(SharedInfo);
   SharedInfo* sharedInfo = new(infoStart) SharedInfo;
 
-  *capacityReturn = infoStart - buf;
+  *capacityReturn = uint64_t(infoStart - buf);
   *infoReturn = sharedInfo;
 }
 
@@ -995,7 +1041,7 @@ bool IOBufEqual::operator()(const IOBuf& a, const IOBuf& b) const {
       return false;
     }
     size_t n = std::min(ba.size(), bb.size());
-    DCHECK_GT(n, 0);
+    DCHECK_GT(n, 0u);
     if (memcmp(ba.data(), bb.data(), n)) {
       return false;
     }

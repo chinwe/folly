@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -204,11 +204,22 @@
 //
 // If you have observed by profiling that your SharedMutex-s are getting
 // cache misses on deferredReaders[] due to another SharedMutex user, then
-// you can use the tag type plus the RWDEFERREDLOCK_DECLARE_STATIC_STORAGE
-// macro to create your own instantiation of the type.  The contention
-// threshold (see kNumSharedToStartDeferring) should make this unnecessary
-// in all but the most extreme cases.  Make sure to check that the
-// increased icache and dcache footprint of the tagged result is worth it.
+// you can use the tag type to create your own instantiation of the type.
+// The contention threshold (see kNumSharedToStartDeferring) should make
+// this unnecessary in all but the most extreme cases.  Make sure to check
+// that the increased icache and dcache footprint of the tagged result is
+// worth it.
+
+// SharedMutex's use of thread local storage is as an optimization, so
+// for the case where thread local storage is not supported, define it
+// away.
+#ifndef FOLLY_SHAREDMUTEX_TLS
+#if !FOLLY_MOBILE
+#define FOLLY_SHAREDMUTEX_TLS FOLLY_TLS
+#else
+#define FOLLY_SHAREDMUTEX_TLS
+#endif
+#endif
 
 namespace folly {
 
@@ -238,7 +249,7 @@ class SharedMutexImpl {
   class UpgradeHolder;
   class WriteHolder;
 
-  constexpr SharedMutexImpl() : state_(0) {}
+  constexpr SharedMutexImpl() noexcept : state_(0) {}
 
   SharedMutexImpl(const SharedMutexImpl&) = delete;
   SharedMutexImpl(SharedMutexImpl&&) = delete;
@@ -710,7 +721,11 @@ class SharedMutexImpl {
   static constexpr uintptr_t kTokenless = 0x1;
 
   // This is the starting location for Token-less unlock_shared().
-  static FOLLY_TLS uint32_t tls_lastTokenlessSlot;
+  static FOLLY_SHAREDMUTEX_TLS uint32_t tls_lastTokenlessSlot;
+
+  // Last deferred reader slot used.
+  static FOLLY_SHAREDMUTEX_TLS uint32_t tls_lastDeferredReaderSlot;
+
 
   // Only indexes divisible by kDeferredSeparationFactor are used.
   // If any of those elements points to a SharedMutexImpl, then it
@@ -750,7 +765,7 @@ class SharedMutexImpl {
       }
 
       uint32_t after = (state & kMayDefer) == 0 ? 0 : kPrevDefer;
-      if (!ReaderPriority || (state & (kMayDefer | kHasS)) == 0) {
+      if (!kReaderPriority || (state & (kMayDefer | kHasS)) == 0) {
         // Block readers immediately, either because we are in write
         // priority mode or because we can acquire the lock in one
         // step.  Note that if state has kHasU, then we are doing an
@@ -791,7 +806,7 @@ class SharedMutexImpl {
             return false;
           }
 
-          if (ReaderPriority && (state & kHasE) == 0) {
+          if (kReaderPriority && (state & kHasE) == 0) {
             assert((state & kBegunE) != 0);
             if (!state_.compare_exchange_strong(state,
                                                 (state & ~kBegunE) | kHasE)) {
@@ -1118,10 +1133,15 @@ class SharedMutexImpl {
 
  public:
   class ReadHolder {
-   public:
     ReadHolder() : lock_(nullptr) {}
 
-    explicit ReadHolder(const SharedMutexImpl* lock) : ReadHolder(*lock) {}
+   public:
+    explicit ReadHolder(const SharedMutexImpl* lock)
+        : lock_(const_cast<SharedMutexImpl*>(lock)) {
+      if (lock_) {
+        lock_->lock_shared(token_);
+      }
+    }
 
     explicit ReadHolder(const SharedMutexImpl& lock)
         : lock_(const_cast<SharedMutexImpl*>(&lock)) {
@@ -1175,10 +1195,14 @@ class SharedMutexImpl {
   };
 
   class UpgradeHolder {
-   public:
     UpgradeHolder() : lock_(nullptr) {}
 
-    explicit UpgradeHolder(SharedMutexImpl* lock) : UpgradeHolder(*lock) {}
+   public:
+    explicit UpgradeHolder(SharedMutexImpl* lock) : lock_(lock) {
+      if (lock_) {
+        lock_->lock_upgrade();
+      }
+    }
 
     explicit UpgradeHolder(SharedMutexImpl& lock) : lock_(&lock) {
       lock_->lock_upgrade();
@@ -1221,10 +1245,14 @@ class SharedMutexImpl {
   };
 
   class WriteHolder {
-   public:
     WriteHolder() : lock_(nullptr) {}
 
-    explicit WriteHolder(SharedMutexImpl* lock) : WriteHolder(*lock) {}
+   public:
+    explicit WriteHolder(SharedMutexImpl* lock) : lock_(lock) {
+      if (lock_) {
+        lock_->lock();
+      }
+    }
 
     explicit WriteHolder(SharedMutexImpl& lock) : lock_(&lock) {
       lock_->lock();
@@ -1328,9 +1356,18 @@ template <
     typename Tag_,
     template <typename> class Atom,
     bool BlockImmediately>
-FOLLY_TLS uint32_t
+FOLLY_SHAREDMUTEX_TLS uint32_t
     SharedMutexImpl<ReaderPriority, Tag_, Atom, BlockImmediately>::
         tls_lastTokenlessSlot = 0;
+
+template <
+    bool ReaderPriority,
+    typename Tag_,
+    template <typename> class Atom,
+    bool BlockImmediately>
+FOLLY_SHAREDMUTEX_TLS uint32_t
+    SharedMutexImpl<ReaderPriority, Tag_, Atom, BlockImmediately>::
+        tls_lastDeferredReaderSlot = 0;
 
 template <
     bool ReaderPriority,
@@ -1366,7 +1403,7 @@ bool SharedMutexImpl<ReaderPriority, Tag_, Atom, BlockImmediately>::
       return false;
     }
 
-    uint32_t slot;
+    uint32_t slot = tls_lastDeferredReaderSlot;
     uintptr_t slotValue = 1; // any non-zero value will do
 
     bool canAlreadyDefer = (state & kMayDefer) != 0;
@@ -1374,21 +1411,26 @@ bool SharedMutexImpl<ReaderPriority, Tag_, Atom, BlockImmediately>::
         (state & kHasS) >= (kNumSharedToStartDeferring - 1) * kIncrHasS;
     bool drainInProgress = ReaderPriority && (state & kBegunE) != 0;
     if (canAlreadyDefer || (aboveDeferThreshold && !drainInProgress)) {
-      // starting point for our empty-slot search, can change after
-      // calling waitForZeroBits
-      uint32_t bestSlot =
-          (uint32_t)folly::detail::AccessSpreader<Atom>::current(
-              kMaxDeferredReaders);
+      /* Try using the most recent slot first. */
+      slotValue = deferredReader(slot)->load(std::memory_order_relaxed);
+      if (slotValue != 0) {
+        // starting point for our empty-slot search, can change after
+        // calling waitForZeroBits
+        uint32_t bestSlot =
+            (uint32_t)folly::detail::AccessSpreader<Atom>::current(
+                kMaxDeferredReaders);
 
-      // deferred readers are already enabled, or it is time to
-      // enable them if we can find a slot
-      for (uint32_t i = 0; i < kDeferredSearchDistance; ++i) {
-        slot = bestSlot ^ i;
-        assert(slot < kMaxDeferredReaders);
-        slotValue = deferredReader(slot)->load(std::memory_order_relaxed);
-        if (slotValue == 0) {
-          // found empty slot
-          break;
+        // deferred readers are already enabled, or it is time to
+        // enable them if we can find a slot
+        for (uint32_t i = 0; i < kDeferredSearchDistance; ++i) {
+          slot = bestSlot ^ i;
+          assert(slot < kMaxDeferredReaders);
+          slotValue = deferredReader(slot)->load(std::memory_order_relaxed);
+          if (slotValue == 0) {
+            // found empty slot
+            tls_lastDeferredReaderSlot = slot;
+            break;
+          }
         }
       }
     }

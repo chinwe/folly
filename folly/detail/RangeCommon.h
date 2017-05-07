@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -41,7 +41,7 @@ class StringPieceLite {
   const char* data() const { return b_; }
   const char* begin() const { return b_; }
   const char* end() const { return e_; }
-  size_t size() const { return e_ - b_; }
+  size_t size() const { return size_t(e_ - b_); }
   bool empty() const { return size() == 0; }
   const char& operator[](size_t i) const { DCHECK_GT(size(), i); return b_[i]; }
   template <typename Range>

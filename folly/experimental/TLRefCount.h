@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -87,6 +87,17 @@ class TLRefCount {
 
   template <typename Container>
   static void useGlobal(const Container& refCountPtrs) {
+#ifdef FOLLY_SANITIZE_THREAD
+    // TSAN has a limitation for the number of locks held concurrently, so it's
+    // safer to call useGlobal() serially.
+    if (refCountPtrs.size() > 1) {
+      for (auto refCountPtr : refCountPtrs) {
+        refCountPtr->useGlobal();
+      }
+      return;
+    }
+#endif
+
     std::vector<std::unique_lock<std::mutex>> lgs_;
     for (auto refCountPtr : refCountPtrs) {
       lgs_.emplace_back(refCountPtr->globalMutex_);

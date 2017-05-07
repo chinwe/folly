@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,17 +18,22 @@
 
 #include <folly/Bits.h>
 
-#include <gtest/gtest.h>
+#include <random>
+
+#include <folly/portability/GTest.h>
 
 using namespace folly;
 
 // Test constexpr-ness.
-#ifndef __clang__
+#if !defined(__clang__) && !defined(_MSC_VER)
 static_assert(findFirstSet(2u) == 2, "findFirstSet");
 static_assert(findLastSet(2u) == 2, "findLastSet");
 static_assert(nextPowTwo(2u) == 2, "nextPowTwo");
+#endif
+
+#ifndef __clang__
 static_assert(isPowTwo(2u), "isPowTwo");
-#endif  // __clang__
+#endif
 
 namespace {
 
@@ -46,14 +51,14 @@ void testFFS() {
 
 template <class INT>
 void testFLS() {
-  typedef typename std::make_unsigned<INT>::type UINT;
+  typedef typename std::make_unsigned<INT>::type UINT_T;
   EXPECT_EQ(0, findLastSet(static_cast<INT>(0)));
-  size_t bits = std::numeric_limits<UINT>::digits;
+  size_t bits = std::numeric_limits<UINT_T>::digits;
   for (size_t i = 0; i < bits; i++) {
-    INT v1 = static_cast<UINT>(1) << i;
+    INT v1 = static_cast<UINT_T>(1) << i;
     EXPECT_EQ(i + 1, findLastSet(v1));
 
-    INT v2 = (static_cast<UINT>(1) << i) - 1;
+    INT v2 = (static_cast<UINT_T>(1) << i) - 1;
     EXPECT_EQ(i, findLastSet(v2));
   }
 }
@@ -111,6 +116,29 @@ TEST(Bits, nextPowTwoClz) {
   EXPECT_EQ(1ull << 63, nextPowTwo((1ull << 62) + 1));
 }
 
+TEST(Bits, prevPowTwoClz) {
+  EXPECT_EQ(0, prevPowTwo(0u));
+  EXPECT_EQ(1, prevPowTwo(1u));
+  EXPECT_EQ(2, prevPowTwo(2u));
+  EXPECT_EQ(2, prevPowTwo(3u));
+  EXPECT_EQ(4, prevPowTwo(4u));
+  EXPECT_EQ(4, prevPowTwo(5u));
+  EXPECT_EQ(4, prevPowTwo(6u));
+  EXPECT_EQ(4, prevPowTwo(7u));
+  EXPECT_EQ(8, prevPowTwo(8u));
+  EXPECT_EQ(8, prevPowTwo(9u));
+  EXPECT_EQ(8, prevPowTwo(13u));
+  EXPECT_EQ(16, prevPowTwo(16u));
+  EXPECT_EQ(256, prevPowTwo(510u));
+  EXPECT_EQ(256, prevPowTwo(511u));
+  EXPECT_EQ(512, prevPowTwo(512u));
+  EXPECT_EQ(512, prevPowTwo(513u));
+  EXPECT_EQ(512, prevPowTwo(777u));
+  EXPECT_EQ(1ul << 30, prevPowTwo((1ul << 31) - 1));
+  EXPECT_EQ(1ull << 31, prevPowTwo((1ull << 32) - 1));
+  EXPECT_EQ(1ull << 62, prevPowTwo((1ull << 62) + 1));
+}
+
 TEST(Bits, isPowTwo) {
   EXPECT_FALSE(isPowTwo(0u));
   EXPECT_TRUE(isPowTwo(1ul));
@@ -138,4 +166,22 @@ TEST(Bits, popcount) {
   EXPECT_EQ(1, popcount(1U));
   EXPECT_EQ(32, popcount(uint32_t(-1)));
   EXPECT_EQ(64, popcount(uint64_t(-1)));
+}
+
+TEST(Bits, Endian_swap_uint) {
+  EXPECT_EQ(uint8_t(0xda), Endian::swap(uint8_t(0xda)));
+  EXPECT_EQ(uint16_t(0x4175), Endian::swap(uint16_t(0x7541)));
+  EXPECT_EQ(uint32_t(0x42efb918), Endian::swap(uint32_t(0x18b9ef42)));
+  EXPECT_EQ(
+      uint64_t(0xa244f5e862c71d8a), Endian::swap(uint64_t(0x8a1dc762e8f544a2)));
+}
+
+TEST(Bits, Endian_swap_real) {
+  std::mt19937_64 rng;
+  auto f = std::uniform_real_distribution<float>()(rng);
+  EXPECT_NE(f, Endian::swap(f));
+  EXPECT_EQ(f, Endian::swap(Endian::swap(f)));
+  auto d = std::uniform_real_distribution<double>()(rng);
+  EXPECT_NE(d, Endian::swap(d));
+  EXPECT_EQ(d, Endian::swap(Endian::swap(d)));
 }

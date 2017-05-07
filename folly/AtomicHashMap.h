@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@
 /*
  * AtomicHashMap --
  *
- * A high performance concurrent hash map with int32 or int64 keys. Supports
+ * A high-performance concurrent hash map with int32 or int64 keys. Supports
  * insert, find(key), findAt(index), erase(key), size, and more.  Memory cannot
  * be freed or reclaimed by erase.  Can grow to a maximum of about 18 times the
  * initial capacity, but performance degrades linearly with growth. Can also be
@@ -25,7 +25,7 @@
  * internal storage (retrieved with iterator::getIndex()).
  *
  * Advantages:
- *    - High performance (~2-4x tbb::concurrent_hash_map in heavily
+ *    - High-performance (~2-4x tbb::concurrent_hash_map in heavily
  *      multi-threaded environments).
  *    - Efficient memory usage if initial capacity is not over estimated
  *      (especially for small keys and values).
@@ -56,7 +56,7 @@
  *   faster because of reduced data indirection.
  *
  *   AHMap is a wrapper around AHArray sub-maps that allows growth and provides
- *   an interface closer to the stl UnorderedAssociativeContainer concept. These
+ *   an interface closer to the STL UnorderedAssociativeContainer concept. These
  *   sub-maps are allocated on the fly and are processed in series, so the more
  *   there are (from growing past initial capacity), the worse the performance.
  *
@@ -197,7 +197,8 @@ typedef AtomicHashArray<KeyT, ValueT, HashFcn, EqualFcn,
   explicit AtomicHashMap(size_t finalSizeEst, const Config& c = Config());
 
   ~AtomicHashMap() {
-    const int numMaps = numMapsAllocated_.load(std::memory_order_relaxed);
+    const unsigned int numMaps =
+        numMapsAllocated_.load(std::memory_order_relaxed);
     FOR_EACH_RANGE (i, 0, numMaps) {
       SubMap* thisMap = subMaps_[i].load(std::memory_order_relaxed);
       DCHECK(thisMap);
@@ -447,7 +448,7 @@ typedef AtomicHashArray<KeyT, ValueT, HashFcn, EqualFcn,
   std::atomic<SubMap*> subMaps_[kNumSubMaps_];
   std::atomic<uint32_t> numMapsAllocated_;
 
-  inline bool tryLockMap(int idx) {
+  inline bool tryLockMap(unsigned int idx) {
     SubMap* val = nullptr;
     return subMaps_[idx].compare_exchange_strong(val, (SubMap*)kLockedPtr_,
       std::memory_order_acquire);

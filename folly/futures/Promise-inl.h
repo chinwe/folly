@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -134,7 +134,7 @@ void Promise<T>::setWith(F&& func) {
 }
 
 template <class T>
-bool Promise<T>::isFulfilled() {
+bool Promise<T>::isFulfilled() const noexcept {
   if (core_) {
     return core_->hasResult();
   }

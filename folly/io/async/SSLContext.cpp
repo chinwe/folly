@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,15 +16,11 @@
 
 #include "SSLContext.h"
 
-#include <openssl/err.h>
-#include <openssl/rand.h>
-#include <openssl/ssl.h>
-#include <openssl/x509v3.h>
-
 #include <folly/Format.h>
 #include <folly/Memory.h>
 #include <folly/Random.h>
 #include <folly/SpinLock.h>
+#include <folly/ThreadId.h>
 
 // ---------------------------------------------------------------------
 // SSLContext implementation
@@ -35,6 +31,9 @@ struct CRYPTO_dynlock_value {
 };
 
 namespace folly {
+//
+// For OpenSSL portability API
+using namespace folly::ssl;
 
 bool SSLContext::initialized_ = false;
 
@@ -84,7 +83,7 @@ SSLContext::SSLContext(SSLVersion version) {
 
   SSL_CTX_set_options(ctx_, SSL_OP_NO_COMPRESSION);
 
-#if OPENSSL_VERSION_NUMBER >= 0x1000105fL && !defined(OPENSSL_NO_TLSEXT)
+#if FOLLY_OPENSSL_HAS_SNI
   SSL_CTX_set_tlsext_servername_callback(ctx_, baseServerNameOpenSSLCallback);
   SSL_CTX_set_tlsext_servername_arg(ctx_, this);
 #endif
@@ -146,16 +145,7 @@ void SSLContext::setClientECCurvesList(
 }
 
 void SSLContext::setServerECCurve(const std::string& curveName) {
-  bool validCall = false;
-#if OPENSSL_VERSION_NUMBER >= 0x0090800fL
-#ifndef OPENSSL_NO_ECDH
-  validCall = true;
-#endif
-#endif
-  if (!validCall) {
-    throw std::runtime_error("Elliptic curve encryption not allowed");
-  }
-
+#if OPENSSL_VERSION_NUMBER >= 0x0090800fL && !defined(OPENSSL_NO_ECDH)
   EC_KEY* ecdh = nullptr;
   int nid;
 
@@ -169,16 +159,17 @@ void SSLContext::setServerECCurve(const std::string& curveName) {
   nid = OBJ_sn2nid(curveName.c_str());
   if (nid == 0) {
     LOG(FATAL) << "Unknown curve name:" << curveName.c_str();
-    return;
   }
   ecdh = EC_KEY_new_by_curve_name(nid);
   if (ecdh == nullptr) {
     LOG(FATAL) << "Unable to create curve:" << curveName.c_str();
-    return;
   }
 
   SSL_CTX_set_tmp_ecdh(ctx_, ecdh);
   EC_KEY_free(ecdh);
+#else
+  throw std::runtime_error("Elliptic curve encryption not allowed");
+#endif
 }
 
 void SSLContext::setX509VerifyParam(
@@ -278,7 +269,7 @@ void SSLContext::loadCertificateFromBufferPEM(folly::StringPiece cert) {
     throw std::runtime_error("BIO_new: " + getErrors());
   }
 
-  int written = BIO_write(bio.get(), cert.data(), cert.size());
+  int written = BIO_write(bio.get(), cert.data(), int(cert.size()));
   if (written <= 0 || static_cast<unsigned>(written) != cert.size()) {
     throw std::runtime_error("BIO_write: " + getErrors());
   }
@@ -318,7 +309,7 @@ void SSLContext::loadPrivateKeyFromBufferPEM(folly::StringPiece pkey) {
     throw std::runtime_error("BIO_new: " + getErrors());
   }
 
-  int written = BIO_write(bio.get(), pkey.data(), pkey.size());
+  int written = BIO_write(bio.get(), pkey.data(), int(pkey.size()));
   if (written <= 0 || static_cast<unsigned>(written) != pkey.size()) {
     throw std::runtime_error("BIO_write: " + getErrors());
   }
@@ -341,6 +332,7 @@ void SSLContext::loadTrustedCertificates(const char* path) {
   if (SSL_CTX_load_verify_locations(ctx_, path, nullptr) == 0) {
     throw std::runtime_error("SSL_CTX_load_verify_locations: " + getErrors());
   }
+  ERR_clear_error();
 }
 
 void SSLContext::loadTrustedCertificates(X509_STORE* store) {
@@ -370,7 +362,7 @@ void SSLContext::passwordCollector(std::shared_ptr<PasswordCollector> collector)
   SSL_CTX_set_default_passwd_cb_userdata(ctx_, this);
 }
 
-#if OPENSSL_VERSION_NUMBER >= 0x1000105fL && !defined(OPENSSL_NO_TLSEXT)
+#if FOLLY_OPENSSL_HAS_SNI
 
 void SSLContext::setServerNameCallback(const ServerNameCallback& cb) {
   serverNameCb_ = cb;
@@ -449,7 +441,7 @@ void SSLContext::switchCiphersIfTLS11(
                  << ", but tls11AltCipherlist is of length "
                  << tls11AltCipherlist.size();
     } else {
-      ciphers = &tls11AltCipherlist[index].first;
+      ciphers = &tls11AltCipherlist[size_t(index)].first;
     }
   }
 
@@ -465,9 +457,9 @@ void SSLContext::switchCiphersIfTLS11(
     SSL_set_cipher_list(ssl, providedCiphersString_.c_str());
   }
 }
-#endif
+#endif // FOLLY_OPENSSL_HAS_SNI
 
-#if OPENSSL_VERSION_NUMBER >= 0x1000200fL && !defined(OPENSSL_NO_TLSEXT)
+#if FOLLY_OPENSSL_HAS_ALPN
 int SSLContext::alpnSelectCallback(SSL* /* ssl */,
                                    const unsigned char** out,
                                    unsigned char* outlen,
@@ -493,7 +485,7 @@ int SSLContext::alpnSelectCallback(SSL* /* ssl */,
   }
   return SSL_TLSEXT_ERR_OK;
 }
-#endif
+#endif // FOLLY_OPENSSL_HAS_ALPN
 
 #ifdef OPENSSL_NPN_NEGOTIATED
 
@@ -517,12 +509,12 @@ bool SSLContext::setRandomizedAdvertisedNextProtocols(
     advertised_item.length = 0;
     for (const auto& proto : item.protocols) {
       ++advertised_item.length;
-      unsigned protoLength = proto.length();
+      auto protoLength = proto.length();
       if (protoLength >= 256) {
         deleteNextProtocolsStrings();
         return false;
       }
-      advertised_item.length += protoLength;
+      advertised_item.length += unsigned(protoLength);
     }
     advertised_item.protocols = new unsigned char[advertised_item.length];
     if (!advertised_item.protocols) {
@@ -530,7 +522,7 @@ bool SSLContext::setRandomizedAdvertisedNextProtocols(
     }
     unsigned char* dst = advertised_item.protocols;
     for (auto& proto : item.protocols) {
-      unsigned protoLength = proto.length();
+      uint8_t protoLength = uint8_t(proto.length());
       *dst++ = (unsigned char)protoLength;
       memcpy(dst, proto.data(), protoLength);
       dst += protoLength;
@@ -551,7 +543,7 @@ bool SSLContext::setRandomizedAdvertisedNextProtocols(
         ctx_, advertisedNextProtocolCallback, this);
     SSL_CTX_set_next_proto_select_cb(ctx_, selectNextProtocolCallback, this);
   }
-#if OPENSSL_VERSION_NUMBER >= 0x1000200fL && !defined(OPENSSL_NO_TLSEXT)
+#if FOLLY_OPENSSL_HAS_ALPN
   if ((uint8_t)protocolType & (uint8_t)NextProtocolType::ALPN) {
     SSL_CTX_set_alpn_select_cb(ctx_, alpnSelectCallback, this);
     // Client cannot really use randomized alpn
@@ -575,7 +567,7 @@ void SSLContext::unsetNextProtocols() {
   deleteNextProtocolsStrings();
   SSL_CTX_set_next_protos_advertised_cb(ctx_, nullptr, nullptr);
   SSL_CTX_set_next_proto_select_cb(ctx_, nullptr, nullptr);
-#if OPENSSL_VERSION_NUMBER >= 0x1000200fL && !defined(OPENSSL_NO_TLSEXT)
+#if FOLLY_OPENSSL_HAS_ALPN
   SSL_CTX_set_alpn_select_cb(ctx_, nullptr, nullptr);
   SSL_CTX_set_alpn_protos(ctx_, nullptr, 0);
 #endif
@@ -584,7 +576,7 @@ void SSLContext::unsetNextProtocols() {
 size_t SSLContext::pickNextProtocols() {
   CHECK(!advertisedNextProtocols_.empty()) << "Failed to pickNextProtocols";
   auto rng = ThreadLocalPRNG();
-  return nextProtocolDistribution_(rng);
+  return size_t(nextProtocolDistribution_(rng));
 }
 
 int SSLContext::advertisedNextProtocolCallback(SSL* ssl,
@@ -667,8 +659,9 @@ void SSLContext::setSessionCacheContext(const std::string& context) {
   SSL_CTX_set_session_id_context(
       ctx_,
       reinterpret_cast<const unsigned char*>(context.data()),
-      std::min(
-          static_cast<int>(context.length()), SSL_MAX_SSL_SESSION_ID_LENGTH));
+      std::min<unsigned int>(
+          static_cast<unsigned int>(context.length()),
+          SSL_MAX_SSL_SESSION_ID_LENGTH));
 }
 
 /**
@@ -715,11 +708,11 @@ int SSLContext::passwordCallback(char* password,
   std::string userPassword;
   // call user defined password collector to get password
   context->passwordCollector()->getPassword(userPassword, size);
-  int length = userPassword.size();
+  auto length = int(userPassword.size());
   if (length > size) {
     length = size;
   }
-  strncpy(password, userPassword.c_str(), length);
+  strncpy(password, userPassword.c_str(), size_t(length));
   return length;
 }
 
@@ -770,22 +763,14 @@ static std::map<int, SSLContext::SSLLockType>& lockTypes() {
 
 static void callbackLocking(int mode, int n, const char*, int) {
   if (mode & CRYPTO_LOCK) {
-    locks()[n].lock();
+    locks()[size_t(n)].lock();
   } else {
-    locks()[n].unlock();
+    locks()[size_t(n)].unlock();
   }
 }
 
 static unsigned long callbackThreadID() {
-  return static_cast<unsigned long>(
-#ifdef __APPLE__
-    pthread_mach_thread_np(pthread_self())
-#elif _MSC_VER
-    pthread_getw32threadid_np(pthread_self())
-#else
-    pthread_self()
-#endif
-  );
+  return static_cast<unsigned long>(folly::getCurrentThreadID());
 }
 
 static CRYPTO_dynlock_value* dyn_create(const char*, int) {
@@ -808,8 +793,36 @@ static void dyn_destroy(struct CRYPTO_dynlock_value* lock, const char*, int) {
   delete lock;
 }
 
-void SSLContext::setSSLLockTypes(std::map<int, SSLLockType> inLockTypes) {
+void SSLContext::setSSLLockTypesLocked(std::map<int, SSLLockType> inLockTypes) {
   lockTypes() = inLockTypes;
+}
+
+void SSLContext::setSSLLockTypes(std::map<int, SSLLockType> inLockTypes) {
+  std::lock_guard<std::mutex> g(initMutex());
+  if (initialized_) {
+    // We set the locks on initialization, so if we are already initialized
+    // this would have no affect.
+    LOG(INFO) << "Ignoring setSSLLockTypes after initialization";
+    return;
+  }
+  setSSLLockTypesLocked(std::move(inLockTypes));
+}
+
+void SSLContext::setSSLLockTypesAndInitOpenSSL(
+    std::map<int, SSLLockType> inLockTypes) {
+  std::lock_guard<std::mutex> g(initMutex());
+  CHECK(!initialized_) << "OpenSSL is already initialized";
+  setSSLLockTypesLocked(std::move(inLockTypes));
+  initializeOpenSSLLocked();
+}
+
+bool SSLContext::isSSLLockDisabled(int lockId) {
+  std::lock_guard<std::mutex> g(initMutex());
+  CHECK(initialized_) << "OpenSSL is not initialized yet";
+  const auto& sslLocks = lockTypes();
+  const auto it = sslLocks.find(lockId);
+  return it != sslLocks.end() &&
+      it->second == SSLContext::SSLLockType::LOCK_NONE;
 }
 
 #if defined(SSL_MODE_HANDSHAKE_CUTTHROUGH)
@@ -836,9 +849,9 @@ void SSLContext::initializeOpenSSLLocked() {
   SSL_load_error_strings();
   ERR_load_crypto_strings();
   // static locking
-  locks().reset(new SSLLock[::CRYPTO_num_locks()]);
+  locks().reset(new SSLLock[size_t(CRYPTO_num_locks())]);
   for (auto it: lockTypes()) {
-    locks()[it.first].lockType = it.second;
+    locks()[size_t(it.first)].lockType = it.second;
   }
   CRYPTO_set_id_callback(callbackThreadID);
   CRYPTO_set_locking_callback(callbackLocking);
@@ -872,7 +885,7 @@ void SSLContext::cleanupOpenSSLLocked() {
   CRYPTO_cleanup_all_ex_data();
   ERR_free_strings();
   EVP_cleanup();
-  ERR_remove_state(0);
+  ERR_clear_error();
   locks().reset();
   initialized_ = false;
 }

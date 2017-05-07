@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements. See the NOTICE file
@@ -44,7 +44,11 @@ class EventHandler : private boost::noncopyable {
     READ = EV_READ,
     WRITE = EV_WRITE,
     READ_WRITE = (READ | WRITE),
-    PERSIST = EV_PERSIST
+    PERSIST = EV_PERSIST,
+// Temporary flag until EPOLLPRI is upstream on libevent.
+#ifdef EV_PRI
+    PRI = EV_PRI,
+#endif
   };
 
   /**
@@ -148,8 +152,7 @@ class EventHandler : private boost::noncopyable {
    * Return the set of events that we're currently registered for.
    */
   uint16_t getRegisteredEvents() const {
-    return (isHandlerRegistered()) ?
-      event_.ev_events : 0;
+    return (isHandlerRegistered()) ? uint16_t(event_.ev_events) : 0u;
   }
 
   /**

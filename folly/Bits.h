@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -70,11 +70,8 @@
 #include <folly/detail/BitIteratorDetail.h>
 #include <folly/Likely.h>
 
-#if FOLLY_HAVE_BYTESWAP_H
-# include <byteswap.h>
-#endif
-
 #include <cassert>
+#include <cstring>
 #include <cinttypes>
 #include <iterator>
 #include <limits>
@@ -94,7 +91,7 @@ typename std::enable_if<
    sizeof(T) <= sizeof(unsigned int)),
   unsigned int>::type
   findFirstSet(T x) {
-  return __builtin_ffs(x);
+  return static_cast<unsigned int>(__builtin_ffs(static_cast<int>(x)));
 }
 
 template <class T>
@@ -106,7 +103,7 @@ typename std::enable_if<
    sizeof(T) <= sizeof(unsigned long)),
   unsigned int>::type
   findFirstSet(T x) {
-  return __builtin_ffsl(x);
+  return static_cast<unsigned int>(__builtin_ffsl(static_cast<long>(x)));
 }
 
 template <class T>
@@ -118,7 +115,7 @@ typename std::enable_if<
    sizeof(T) <= sizeof(unsigned long long)),
   unsigned int>::type
   findFirstSet(T x) {
-  return __builtin_ffsll(x);
+  return static_cast<unsigned int>(__builtin_ffsll(static_cast<long long>(x)));
 }
 
 template <class T>
@@ -143,7 +140,9 @@ typename std::enable_if<
    sizeof(T) <= sizeof(unsigned int)),
   unsigned int>::type
   findLastSet(T x) {
-  return x ? 8 * sizeof(unsigned int) - __builtin_clz(x) : 0;
+  // If X is a power of two X - Y = ((X - 1) ^ Y) + 1. Doing this transformation
+  // allows GCC to remove its own xor that it adds to implement clz using bsr
+  return x ? ((8 * sizeof(unsigned int) - 1) ^ __builtin_clz(x)) + 1 : 0;
 }
 
 template <class T>
@@ -155,7 +154,7 @@ typename std::enable_if<
    sizeof(T) <= sizeof(unsigned long)),
   unsigned int>::type
   findLastSet(T x) {
-  return x ? 8 * sizeof(unsigned long) - __builtin_clzl(x) : 0;
+  return x ? ((8 * sizeof(unsigned long) - 1) ^ __builtin_clzl(x)) + 1 : 0;
 }
 
 template <class T>
@@ -167,7 +166,8 @@ typename std::enable_if<
    sizeof(T) <= sizeof(unsigned long long)),
   unsigned int>::type
   findLastSet(T x) {
-  return x ? 8 * sizeof(unsigned long long) - __builtin_clzll(x) : 0;
+  return x ? ((8 * sizeof(unsigned long long) - 1) ^ __builtin_clzll(x)) + 1
+           : 0;
 }
 
 template <class T>
@@ -190,10 +190,16 @@ nextPowTwo(T v) {
 }
 
 template <class T>
-inline constexpr
-typename std::enable_if<
-  std::is_integral<T>::value && std::is_unsigned<T>::value,
-  bool>::type
+inline FOLLY_INTRINSIC_CONSTEXPR typename std::
+    enable_if<std::is_integral<T>::value && std::is_unsigned<T>::value, T>::type
+    prevPowTwo(T v) {
+  return v ? (T(1) << (findLastSet(v) - 1)) : 0;
+}
+
+template <class T>
+inline constexpr typename std::enable_if<
+    std::is_integral<T>::value && std::is_unsigned<T>::value,
+    bool>::type
 isPowTwo(T v) {
   return (v != 0) && !(v & (v - 1));
 }
@@ -208,7 +214,7 @@ inline typename std::enable_if<
    sizeof(T) <= sizeof(unsigned int)),
   size_t>::type
   popcount(T x) {
-  return detail::popcount(x);
+  return size_t(detail::popcount(x));
 }
 
 template <class T>
@@ -219,7 +225,7 @@ inline typename std::enable_if<
    sizeof(T) <= sizeof(unsigned long long)),
   size_t>::type
   popcount(T x) {
-  return detail::popcountll(x);
+  return size_t(detail::popcountll(x));
 }
 
 /**
@@ -227,62 +233,48 @@ inline typename std::enable_if<
  */
 namespace detail {
 
-template <class T>
-struct EndianIntBase {
- public:
-  static T swap(T x);
-};
+template <size_t Size>
+struct uint_types_by_size;
 
-#ifndef _MSC_VER
+#define FB_GEN(sz, fn)                                      \
+  static inline uint##sz##_t byteswap_gen(uint##sz##_t v) { \
+    return fn(v);                                           \
+  }                                                         \
+  template <>                                               \
+  struct uint_types_by_size<sz / 8> {                       \
+    using type = uint##sz##_t;                              \
+  };
 
-/**
- * If we have the bswap_16 macro from byteswap.h, use it; otherwise, provide our
- * own definition.
- */
-#ifdef bswap_16
-# define our_bswap16 bswap_16
-#else
-
-template<class Int16>
-inline constexpr typename std::enable_if<
-  sizeof(Int16) == 2,
-  Int16>::type
-our_bswap16(Int16 x) {
-  return ((x >> 8) & 0xff) | ((x & 0xff) << 8);
-}
-#endif
-
-#endif
-
-#define FB_GEN(t, fn) \
-template<> inline t EndianIntBase<t>::swap(t x) { return fn(x); }
-
-// fn(x) expands to (x) if the second argument is empty, which is exactly
-// what we want for [u]int8_t. Also, gcc 4.7 on Intel doesn't have
-// __builtin_bswap16 for some reason, so we have to provide our own.
-FB_GEN( int8_t,)
-FB_GEN(uint8_t,)
+FB_GEN(8, uint8_t)
 #ifdef _MSC_VER
-FB_GEN( int64_t, _byteswap_uint64)
-FB_GEN(uint64_t, _byteswap_uint64)
-FB_GEN( int32_t, _byteswap_ulong)
-FB_GEN(uint32_t, _byteswap_ulong)
-FB_GEN( int16_t, _byteswap_ushort)
-FB_GEN(uint16_t, _byteswap_ushort)
+FB_GEN(64, _byteswap_uint64)
+FB_GEN(32, _byteswap_ulong)
+FB_GEN(16, _byteswap_ushort)
 #else
-FB_GEN( int64_t, __builtin_bswap64)
-FB_GEN(uint64_t, __builtin_bswap64)
-FB_GEN( int32_t, __builtin_bswap32)
-FB_GEN(uint32_t, __builtin_bswap32)
-FB_GEN( int16_t, our_bswap16)
-FB_GEN(uint16_t, our_bswap16)
+FB_GEN(64, __builtin_bswap64)
+FB_GEN(32, __builtin_bswap32)
+FB_GEN(16, __builtin_bswap16)
 #endif
 
 #undef FB_GEN
 
 template <class T>
-struct EndianInt : public EndianIntBase<T> {
- public:
+struct EndianInt {
+  static_assert(
+      (std::is_integral<T>::value && !std::is_same<T, bool>::value) ||
+          std::is_floating_point<T>::value,
+      "template type parameter must be non-bool integral or floating point");
+  static T swap(T x) {
+    // we implement this with memcpy because that is defined behavior in C++
+    // we rely on compilers to optimize away the memcpy calls
+    constexpr auto s = sizeof(T);
+    using B = typename uint_types_by_size<s>::type;
+    B b;
+    std::memcpy(&b, &x, s);
+    b = byteswap_gen(b);
+    std::memcpy(&x, &b, s);
+    return x;
+  }
   static T big(T x) {
     return kIsLittleEndian ? EndianInt::swap(x) : x;
   }
@@ -417,7 +409,7 @@ class BitIterator
 
   void advance(ssize_t n) {
     size_t bpb = bitsPerBlock();
-    ssize_t blocks = n / bpb;
+    ssize_t blocks = n / ssize_t(bpb);
     bitOffset_ += n % bpb;
     if (bitOffset_ >= bpb) {
       bitOffset_ -= bpb;
@@ -445,12 +437,12 @@ class BitIterator
   }
 
   ssize_t distance_to(const BitIterator& other) const {
-    return
-      (other.base_reference() - this->base_reference()) * bitsPerBlock() +
-      other.bitOffset_ - bitOffset_;
+    return ssize_t(
+        (other.base_reference() - this->base_reference()) * bitsPerBlock() +
+        other.bitOffset_ - bitOffset_);
   }
 
-  unsigned int bitOffset_;
+  size_t bitOffset_;
 };
 
 /**

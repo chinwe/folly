@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,10 +25,10 @@ namespace detail {
 // (see Bits.cpp)
 #ifdef _MSC_VER
 inline int popcount(unsigned int x) {
-  return __popcnt(x);
+  return int(__popcnt(x));
 }
 inline int popcountll(unsigned long long x) {
-  return __popcnt64(x);
+  return int(__popcnt64(x));
 }
 #elif defined(__POPCNT__)
 

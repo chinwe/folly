@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -63,6 +63,11 @@ const uint64_t FingerprintTable<BITS>::poly[1 + (BITS - 1) / 64] = {};
 template <int BITS>
 const uint64_t FingerprintTable<BITS>::table[8][256][1 + (BITS - 1) / 64] = {};
 
+#ifndef _MSC_VER
+// MSVC 2015 can't handle these extern specialization declarations,
+// but they aren't needed for things to work right, so we just don't
+// declare them in the header for MSVC.
+
 #define FOLLY_DECLARE_FINGERPRINT_TABLES(BITS)                      \
   template <>                                                       \
   const uint64_t FingerprintTable<BITS>::poly[1 + (BITS - 1) / 64]; \
@@ -74,6 +79,7 @@ FOLLY_DECLARE_FINGERPRINT_TABLES(96);
 FOLLY_DECLARE_FINGERPRINT_TABLES(128);
 
 #undef FOLLY_DECLARE_FINGERPRINT_TABLES
+#endif
 
 } // namespace detail
 

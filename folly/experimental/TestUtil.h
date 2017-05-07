@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -230,14 +230,6 @@ private:
   int oldFDCopy_;  // equal to fd_ after restore()
 
   off_t readOffset_;  // for incremental reading
-};
-
-class EnvVarSaver {
-public:
-  EnvVarSaver();
-  ~EnvVarSaver();
-private:
-  std::map<std::string, std::string> saved_;
 };
 
 }  // namespace test

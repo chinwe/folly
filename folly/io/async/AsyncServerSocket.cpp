@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@
 #include <folly/io/async/AsyncServerSocket.h>
 
 #include <folly/FileUtil.h>
+#include <folly/Portability.h>
 #include <folly/SocketAddress.h>
 #include <folly/String.h>
 #include <folly/detail/SocketFastOpen.h>
@@ -89,8 +90,7 @@ void AsyncServerSocket::RemoteAcceptor::stop(
 }
 
 void AsyncServerSocket::RemoteAcceptor::messageAvailable(
-  QueueMessage&& msg) {
-
+    QueueMessage&& msg) noexcept {
   switch (msg.type) {
     case MessageType::MSG_NEW_CONN:
     {
@@ -125,7 +125,7 @@ class AsyncServerSocket::BackoffTimeout : public AsyncTimeout {
  public:
   // Disallow copy, move, and default constructors.
   BackoffTimeout(BackoffTimeout&&) = delete;
-  BackoffTimeout(AsyncServerSocket* socket)
+  explicit BackoffTimeout(AsyncServerSocket* socket)
       : AsyncTimeout(socket->getEventBase()), socket_(socket) {}
 
   void timeoutExpired() noexcept override { socket_->backoffTimeoutExpired(); }
@@ -219,7 +219,14 @@ int AsyncServerSocket::stopAccepting(int shutdownFlags) {
   for (std::vector<CallbackInfo>::iterator it = callbacksCopy.begin();
        it != callbacksCopy.end();
        ++it) {
-    it->consumer->stop(it->eventBase, it->callback);
+    // consumer may not be set if we are running in primary event base
+    if (it->consumer) {
+      DCHECK(it->eventBase);
+      it->consumer->stop(it->eventBase, it->callback);
+    } else {
+      DCHECK(it->callback);
+      it->callback->acceptStopped();
+    }
   }
 
   return result;
@@ -273,6 +280,13 @@ void AsyncServerSocket::useExistingSockets(const std::vector<int>& fds) {
     SocketAddress address;
     address.setFromLocalAddress(fd);
 
+#if __linux__
+    if (noTransparentTls_) {
+      // Ignore return value, errors are ok
+      setsockopt(fd, SOL_SOCKET, SO_NO_TRANSPARENT_TLS, nullptr, 0);
+    }
+#endif
+
     setupSocket(fd, address.getFamily());
     sockets_.emplace_back(eventBase_, fd, this, address.getFamily());
     sockets_.back().changeHandlerFD(fd);
@@ -290,6 +304,7 @@ void AsyncServerSocket::bindSocket(
   sockaddr_storage addrStorage;
   address.getAddress(&addrStorage);
   sockaddr* saddr = reinterpret_cast<sockaddr*>(&addrStorage);
+
   if (fsp::bind(fd, saddr, address.getActualSize()) != 0) {
     if (!isExistingSocket) {
       closeNoInt(fd);
@@ -298,6 +313,13 @@ void AsyncServerSocket::bindSocket(
         "failed to bind to async server socket: " +
         address.describe());
   }
+
+#if __linux__
+  if (noTransparentTls_) {
+    // Ignore return value, errors are ok
+    setsockopt(fd, SOL_SOCKET, SO_NO_TRANSPARENT_TLS, nullptr, 0);
+  }
+#endif
 
   // If we just created this socket, update the EventHandler and set socket_
   if (!isExistingSocket) {
@@ -354,16 +376,19 @@ void AsyncServerSocket::bind(
 }
 
 void AsyncServerSocket::bind(uint16_t port) {
-  struct addrinfo hints, *res, *res0;
+  struct addrinfo hints, *res0;
   char sport[sizeof("65536")];
 
   memset(&hints, 0, sizeof(hints));
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
-  hints.ai_flags = AI_PASSIVE;
+  hints.ai_flags = AI_PASSIVE | AI_NUMERICSERV;
   snprintf(sport, sizeof(sport), "%u", port);
 
-  if (getaddrinfo(nullptr, sport, &hints, &res0)) {
+  // On Windows the value we need to pass to bind to all available
+  // addresses is an empty string. Everywhere else, it's nullptr.
+  constexpr const char* kWildcardNode = kIsWindows ? "" : nullptr;
+  if (getaddrinfo(kWildcardNode, sport, &hints, &res0)) {
     throw std::invalid_argument(
                               "Attempted to bind address to socket with "
                               "bad getaddrinfo");
@@ -393,7 +418,7 @@ void AsyncServerSocket::bind(uint16_t port) {
     }
 
     // Bind to the socket
-    if (fsp::bind(s, res->ai_addr, res->ai_addrlen) != 0) {
+    if (fsp::bind(s, res->ai_addr, socklen_t(res->ai_addrlen)) != 0) {
       folly::throwSystemError(
           errno,
           "failed to bind to async server socket for port ",
@@ -401,6 +426,13 @@ void AsyncServerSocket::bind(uint16_t port) {
           " family ",
           SocketAddress::getFamilyNameFrom(res->ai_addr, "<unknown>"));
     }
+
+#if __linux__
+    if (noTransparentTls_) {
+      // Ignore return value, errors are ok
+      setsockopt(s, SOL_SOCKET, SO_NO_TRANSPARENT_TLS, nullptr, 0);
+    }
+#endif
 
     SocketAddress address;
     address.setFromLocalAddress(s);
@@ -416,7 +448,7 @@ void AsyncServerSocket::bind(uint16_t port) {
     // - 0.0.0.0 (IPv4-only)
     // - :: (IPv6+IPv4) in this order
     // See: https://sourceware.org/bugzilla/show_bug.cgi?id=9981
-    for (res = res0; res; res = res->ai_next) {
+    for (struct addrinfo* res = res0; res; res = res->ai_next) {
       if (res->ai_family == AF_INET6) {
         setupAddress(res);
       }
@@ -433,12 +465,12 @@ void AsyncServerSocket::bind(uint16_t port) {
     }
 
     try {
-      for (res = res0; res; res = res->ai_next) {
+      for (struct addrinfo* res = res0; res; res = res->ai_next) {
         if (res->ai_family != AF_INET6) {
           setupAddress(res);
         }
       }
-    } catch (const std::system_error& e) {
+    } catch (const std::system_error&) {
       // If we can't bind to the same port on ipv4 as ipv6 when using
       // port=0 then we will retry again before giving up after
       // kNumTries attempts.  We do this by closing the sockets that
@@ -513,11 +545,22 @@ void AsyncServerSocket::addAcceptCallback(AcceptCallback *callback,
   // start accepting once the callback is installed.
   bool runStartAccepting = accepting_ && callbacks_.empty();
 
-  if (!eventBase) {
-    eventBase = eventBase_; // Run in AsyncServerSocket's eventbase
-  }
-
   callbacks_.emplace_back(callback, eventBase);
+
+  SCOPE_SUCCESS {
+    // If this is the first accept callback and we are supposed to be accepting,
+    // start accepting.
+    if (runStartAccepting) {
+      startAccepting();
+    }
+  };
+
+  if (!eventBase) {
+    // Run in AsyncServerSocket's eventbase; notify that we are
+    // starting to accept connections
+    callback->acceptStarted();
+    return;
+  }
 
   // Start the remote acceptor.
   //
@@ -538,12 +581,6 @@ void AsyncServerSocket::addAcceptCallback(AcceptCallback *callback,
     throw;
   }
   callbacks_.back().consumer = acceptor;
-
-  // If this is the first accept callback and we are supposed to be accepting,
-  // start accepting.
-  if (runStartAccepting) {
-    startAccepting();
-  }
 }
 
 void AsyncServerSocket::removeAcceptCallback(AcceptCallback *callback,
@@ -590,7 +627,16 @@ void AsyncServerSocket::removeAcceptCallback(AcceptCallback *callback,
     }
   }
 
-  info.consumer->stop(info.eventBase, info.callback);
+  if (info.consumer) {
+    // consumer could be nullptr is we run callbacks in primary event
+    // base
+    DCHECK(info.eventBase);
+    info.consumer->stop(info.eventBase, info.callback);
+  } else {
+    // callback invoked in the primary event base, just call directly
+    DCHECK(info.callback);
+    callback->acceptStopped();
+  }
 
   // If we are supposed to be accepting but the last accept callback
   // was removed, unregister for events until a callback is added.
@@ -928,7 +974,7 @@ void AsyncServerSocket::enterBackoff() {
   if (backoffTimeout_ == nullptr) {
     try {
       backoffTimeout_ = new BackoffTimeout(this);
-    } catch (const std::bad_alloc& ex) {
+    } catch (const std::bad_alloc&) {
       // Man, we couldn't even allocate the timer to re-enable accepts.
       // We must be in pretty bad shape.  Don't pause accepting for now,
       // since we won't be able to re-enable ourselves later.

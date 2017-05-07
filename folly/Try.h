@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,41 +16,26 @@
 
 #pragma once
 
-#include <type_traits>
-#include <exception>
-#include <algorithm>
 #include <folly/ExceptionWrapper.h>
 #include <folly/Likely.h>
 #include <folly/Memory.h>
 #include <folly/Portability.h>
 #include <folly/Unit.h>
+#include <exception>
+#include <stdexcept>
+#include <type_traits>
+#include <utility>
 
 namespace folly {
 
-class TryException : public std::exception {
+class TryException : public std::logic_error {
  public:
-  explicit TryException(std::string message_arg) noexcept
-      : message(std::move(message_arg)) {}
-
-  const char* what() const noexcept override {
-    return message.c_str();
-  }
-
-  bool operator==(const TryException& other) const noexcept {
-    return other.message == this->message;
-  }
-
-  bool operator!=(const TryException& other) const noexcept {
-    return !(*this == other);
-  }
-
- protected:
-  std::string message;
+  using std::logic_error::logic_error;
 };
 
 class UsingUninitializedTry : public TryException {
  public:
-  UsingUninitializedTry() noexcept : TryException("Using unitialized try") {}
+  UsingUninitializedTry() : TryException("Using uninitialized try") {}
 };
 
 /*
@@ -417,6 +402,9 @@ typename std::enable_if<
   std::is_same<typename std::result_of<F()>::type, void>::value,
   Try<void>>::type
 makeTryWith(F&& f);
+
+template <typename... Ts>
+std::tuple<Ts...> unwrapTryTuple(std::tuple<folly::Try<Ts>...>&& ts);
 
 } // folly
 

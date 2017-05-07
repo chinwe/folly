@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,9 +17,8 @@
 #include <algorithm>
 #include <thread>
 
-#include <gtest/gtest.h>
-
 #include <folly/AtomicLinkedList.h>
+#include <folly/portability/GTest.h>
 
 class TestIntrusiveObject {
  public:
@@ -73,6 +72,23 @@ TEST(AtomicIntrusiveLinkedList, Basic) {
   }
 
   TestIntrusiveObject::List movedList = std::move(list);
+}
+
+TEST(AtomicIntrusiveLinkedList, ReverseSweep) {
+  TestIntrusiveObject a(1), b(2), c(3);
+  TestIntrusiveObject::List list;
+  list.insertHead(&a);
+  list.insertHead(&b);
+  list.insertHead(&c);
+  size_t next_expected_id = 3;
+  list.reverseSweep([&](TestIntrusiveObject* obj) {
+    EXPECT_EQ(next_expected_id--, obj->id());
+  });
+  EXPECT_TRUE(list.empty());
+  // Test that we can still insert
+  list.insertHead(&a);
+  EXPECT_FALSE(list.empty());
+  list.reverseSweep([](TestIntrusiveObject*) {});
 }
 
 TEST(AtomicIntrusiveLinkedList, Move) {
@@ -153,7 +169,8 @@ TEST(AtomicIntrusiveLinkedList, Stress) {
 
 class TestObject {
  public:
-  TestObject(size_t id__, std::shared_ptr<void> ptr) : id_(id__), ptr_(ptr) {}
+  TestObject(size_t id__, const std::shared_ptr<void>& ptr)
+      : id_(id__), ptr_(ptr) {}
 
   size_t id() {
     return id_;

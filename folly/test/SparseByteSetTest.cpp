@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@
 #include <random>
 #include <set>
 
-#include <gtest/gtest.h>
+#include <folly/portability/GTest.h>
 
 using namespace std;
 using namespace folly;
@@ -55,10 +55,10 @@ TEST_F(SparseByteSetTest, each) {
 
 TEST_F(SparseByteSetTest, each_random) {
   mt19937 rng;
-  uniform_int_distribution<uint8_t> dist;
+  uniform_int_distribution<uint16_t> dist{lims::min(), lims::max()};
   set<uint8_t> added;
   while (added.size() <= lims::max()) {
-    auto c = dist(rng);
+    auto c = uint8_t(dist(rng));
     EXPECT_EQ(added.count(c), s.contains(c));
     EXPECT_EQ(!added.count(c), s.add(c));
     added.insert(c);

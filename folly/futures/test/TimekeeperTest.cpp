@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,10 +14,8 @@
  * limitations under the License.
  */
 
-#include <gtest/gtest.h>
-
 #include <folly/futures/Timekeeper.h>
-#include <folly/portability/Unistd.h>
+#include <folly/portability/GTest.h>
 
 using namespace folly;
 using std::chrono::milliseconds;
@@ -129,7 +127,7 @@ TEST(Timekeeper, futureWithinException) {
 
 TEST(Timekeeper, onTimeout) {
   bool flag = false;
-  makeFuture(42).delayed(one_ms)
+  makeFuture(42).delayed(10 * one_ms)
     .onTimeout(zero_ms, [&]{ flag = true; return -1; })
     .get();
   EXPECT_TRUE(flag);
@@ -137,7 +135,7 @@ TEST(Timekeeper, onTimeout) {
 
 TEST(Timekeeper, onTimeoutReturnsFuture) {
   bool flag = false;
-  makeFuture(42).delayed(one_ms)
+  makeFuture(42).delayed(10 * one_ms)
     .onTimeout(zero_ms, [&]{ flag = true; return makeFuture(-1); })
     .get();
   EXPECT_TRUE(flag);

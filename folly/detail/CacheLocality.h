@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <sched.h>
 #include <algorithm>
 #include <atomic>
 #include <cassert>
@@ -25,10 +24,11 @@
 #include <string>
 #include <type_traits>
 #include <vector>
-#include <pthread.h>
+
 #include <folly/Hash.h>
 #include <folly/Likely.h>
 #include <folly/Portability.h>
+#include <folly/ThreadId.h>
 
 namespace folly {
 namespace detail {
@@ -148,7 +148,7 @@ template <template <typename> class Atom>
 struct SequentialThreadId {
 
   /// Returns the thread id assigned to the current thread
-  static size_t get() {
+  static unsigned get() {
     auto rv = currentId;
     if (UNLIKELY(rv == 0)) {
       rv = currentId = ++prevId;
@@ -157,16 +157,16 @@ struct SequentialThreadId {
   }
 
  private:
-  static Atom<size_t> prevId;
+  static Atom<unsigned> prevId;
 
-  static FOLLY_TLS size_t currentId;
+  static FOLLY_TLS unsigned currentId;
 };
 
 template <template <typename> class Atom>
-Atom<size_t> SequentialThreadId<Atom>::prevId(0);
+Atom<unsigned> SequentialThreadId<Atom>::prevId(0);
 
 template <template <typename> class Atom>
-FOLLY_TLS size_t SequentialThreadId<Atom>::currentId(0);
+FOLLY_TLS unsigned SequentialThreadId<Atom>::currentId(0);
 
 // Suppress this instantiation in other translation units. It is
 // instantiated in CacheLocality.cpp
@@ -174,11 +174,8 @@ extern template struct SequentialThreadId<std::atomic>;
 #endif
 
 struct HashingThreadId {
-  static size_t get() {
-    pthread_t pid = pthread_self();
-    uint64_t id = 0;
-    memcpy(&id, &pid, std::min(sizeof(pid), sizeof(id)));
-    return hash::twang_32from64(id);
+  static unsigned get() {
+    return hash::twang_32from64(getCurrentThreadID());
   }
 };
 
@@ -328,7 +325,8 @@ struct AccessSpreader {
         assert(index < n);
         // as index goes from 0..n, post-transform value goes from
         // 0..numStripes
-        widthAndCpuToStripe[width][cpu] = (index * numStripes) / n;
+        widthAndCpuToStripe[width][cpu] =
+            CompactStripe((index * numStripes) / n);
         assert(widthAndCpuToStripe[width][cpu] < numStripes);
       }
       for (size_t cpu = n; cpu < kMaxCpus; ++cpu) {

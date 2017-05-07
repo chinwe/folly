@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,9 +23,9 @@
 #include <thread>
 
 #include <glog/logging.h>
-#include <gtest/gtest.h>
 
 #include <folly/portability/Time.h>
+#include <folly/portability/GTest.h>
 
 using namespace folly::detail;
 using namespace folly::test;
@@ -182,6 +182,21 @@ void run_steady_clock_test() {
   EXPECT_TRUE(A <= B && B <= C);
 }
 
+template <template <typename> class Atom>
+void run_wake_blocked_test() {
+  Futex<Atom> f(0);
+
+  auto thr = DSched::thread([&] { EXPECT_TRUE(f.futexWait(0)); });
+
+  // A sleep here guarantees to a large extent that 'thr' will execute
+  // futexWait before we wake it up, thus testing late futexWake.
+  std::this_thread::sleep_for(std::chrono::milliseconds(2));
+
+  f.store(1);
+  f.futexWake(1);
+  DSched::join(thr);
+}
+
 TEST(Futex, clock_source) {
   run_system_clock_test();
 
@@ -206,4 +221,12 @@ TEST(Futex, basic_deterministic) {
   DSched sched(DSched::uniform(0));
   run_basic_tests<DeterministicAtomic>();
   run_wait_until_tests<DeterministicAtomic>();
+}
+
+TEST(Futex, wake_blocked_live) {
+  run_wake_blocked_test<std::atomic>();
+}
+
+TEST(Futex, wake_blocked_emulated) {
+  run_wake_blocked_test<EmulatedFutexAtomic>();
 }

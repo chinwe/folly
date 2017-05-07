@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,11 +35,12 @@
 #include <unordered_map>
 
 #include <glog/logging.h>
-#include <gtest/gtest.h>
 
 #include <folly/Baton.h>
 #include <folly/Memory.h>
+#include <folly/ThreadId.h>
 #include <folly/experimental/io/FsUtil.h>
+#include <folly/portability/GTest.h>
 #include <folly/portability/Unistd.h>
 
 using namespace folly;
@@ -405,7 +406,7 @@ class FillObject {
 
  private:
   uint64_t val() const {
-    return (idx_ << 40) | uint64_t(pthread_self());
+    return (idx_ << 40) | folly::getCurrentThreadID();
   }
 
   uint64_t idx_;
@@ -414,18 +415,17 @@ class FillObject {
 
 }  // namespace
 
-#if FOLLY_HAVE_STD_THIS_THREAD_SLEEP_FOR
 TEST(ThreadLocal, Stress) {
-  constexpr size_t numFillObjects = 250;
+  static constexpr size_t numFillObjects = 250;
   std::array<ThreadLocalPtr<FillObject>, numFillObjects> objects;
 
-  constexpr size_t numThreads = 32;
-  constexpr size_t numReps = 20;
+  static constexpr size_t numThreads = 32;
+  static constexpr size_t numReps = 20;
 
   std::vector<std::thread> threads;
   threads.reserve(numThreads);
 
-  for (size_t i = 0; i < numThreads; ++i) {
+  for (size_t k = 0; k < numThreads; ++k) {
     threads.emplace_back([&objects] {
       for (size_t rep = 0; rep < numReps; ++rep) {
         for (size_t i = 0; i < objects.size(); ++i) {
@@ -445,7 +445,6 @@ TEST(ThreadLocal, Stress) {
 
   EXPECT_EQ(numFillObjects * numThreads * numReps, gDestroyed);
 }
-#endif
 
 // Yes, threads and fork don't mix
 // (http://cppwisdom.quora.com/Why-threads-and-fork-dont-mix) but if you're
@@ -584,7 +583,7 @@ TEST(ThreadLocal, Fork2) {
 
 TEST(ThreadLocal, SharedLibrary) {
   auto exe = fs::executable_path();
-  auto lib = exe.parent_path() / "lib_thread_local_test.so";
+  auto lib = exe.parent_path() / "thread_local_test_lib.so";
   auto handle = dlopen(lib.string().c_str(), RTLD_LAZY);
   EXPECT_NE(nullptr, handle);
 

@@ -73,8 +73,15 @@ Folly is published on Github at https://github.com/facebook/folly
 folly requires gcc 4.8+ and a version of boost compiled with C++11 support.
 
 Please download googletest from
-https://googletest.googlecode.com/files/gtest-1.7.0.zip and unzip it in the
-folly/test subdirectory.
+https://github.com/google/googletest/archive/release-1.8.0.tar.gz and unpack it into the
+folly/test subdirectory as `gtest`:
+
+    (cd folly/test && \
+     rm -rf gtest && \
+     wget https://github.com/google/googletest/archive/release-1.8.0.tar.gz && \
+     tar zxf release-1.8.0.tar.gz && \
+     rm -f release-1.8.0.tar.gz && \
+     mv googletest-release-1.8.0 gtest)
 
 #### Ubuntu 12.04
 
@@ -106,10 +113,11 @@ sudo apt-get install \
     zlib1g-dev \
     binutils-dev \
     libjemalloc-dev \
-    libssl-dev
+    libssl-dev \
+    pkg-config
 ```
 
-If advanced debugging functionality for tests are required
+If advanced debugging functionality is required
 
 ```
 sudo apt-get install \
@@ -147,8 +155,6 @@ You may also use `folly/build/bootstrap-osx-homebrew.sh` to build against `maste
 ```
   cd folly
   ./build/bootstrap-osx-homebrew.sh
-  make
-  make check
 ```
 
 #### OS X (MacPorts)

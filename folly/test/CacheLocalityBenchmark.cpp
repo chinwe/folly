@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,12 +16,12 @@
 
 #include <folly/detail/CacheLocality.h>
 
-#include <sched.h>
 #include <memory>
 #include <thread>
-#include <type_traits>
 #include <unordered_map>
+
 #include <glog/logging.h>
+
 #include <folly/Benchmark.h>
 
 using namespace folly::detail;
@@ -168,7 +168,7 @@ static void contentionAtWidth(size_t iters, size_t stripes, size_t work) {
 
       ready++;
       while (!go.load()) {
-        sched_yield();
+        std::this_thread::yield();
       }
       std::atomic<int> localWork(0);
       for (size_t i = iters; i > 0; --i) {
@@ -188,7 +188,7 @@ static void contentionAtWidth(size_t iters, size_t stripes, size_t work) {
   }
 
   while (ready < numThreads) {
-    sched_yield();
+    std::this_thread::yield();
   }
   braces.dismiss();
   go = true;
@@ -209,7 +209,7 @@ static void atomicIncrBaseline(size_t iters,
   while (threads.size() < numThreads) {
     threads.push_back(std::thread([&]() {
       while (!go.load()) {
-        sched_yield();
+        std::this_thread::yield();
       }
       std::atomic<size_t> localCounter(0);
       std::atomic<int> localWork(0);

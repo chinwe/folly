@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,8 +17,9 @@
 #pragma once
 
 #include <type_traits>
-#include <stdint.h>
 #include <assert.h>
+#include <errno.h>
+#include <stdint.h>
 #include <boost/noncopyable.hpp>
 #include <folly/AtomicStruct.h>
 #include <folly/detail/CacheLocality.h>
@@ -83,12 +84,13 @@ struct IndexedMemPoolRecycler;
 /// constructed, but delays element construction.  This means that only
 /// elements that are actually returned to the caller get paged into the
 /// process's resident set (RSS).
-template <typename T,
-          int NumLocalLists_ = 32,
-          int LocalListLimit_ = 200,
-          template<typename> class Atom = std::atomic,
-          bool EagerRecycleWhenTrivial = false,
-          bool EagerRecycleWhenNotTrivial = true>
+template <
+    typename T,
+    uint32_t NumLocalLists_ = 32,
+    uint32_t LocalListLimit_ = 200,
+    template <typename> class Atom = std::atomic,
+    bool EagerRecycleWhenTrivial = false,
+    bool EagerRecycleWhenNotTrivial = true>
 struct IndexedMemPool : boost::noncopyable {
   typedef T value_type;
 
@@ -111,9 +113,11 @@ struct IndexedMemPool : boost::noncopyable {
   // of bits required to hold indices from a pool, given its capacity
 
   static constexpr uint32_t maxIndexForCapacity(uint32_t capacity) {
-    // index of uint32_t(-1) == UINT32_MAX is reserved for isAllocated tracking
-    return std::min(uint64_t(capacity) + (NumLocalLists - 1) * LocalListLimit,
-                    uint64_t(uint32_t(-1) - 1));
+    // index of std::numeric_limits<uint32_t>::max() is reserved for isAllocated
+    // tracking
+    return uint32_t(std::min(
+        uint64_t(capacity) + (NumLocalLists - 1) * LocalListLimit,
+        uint64_t(std::numeric_limits<uint32_t>::max() - 1)));
   }
 
   static constexpr uint32_t capacityForMaxIndex(uint32_t maxIndex) {
@@ -129,7 +133,7 @@ struct IndexedMemPool : boost::noncopyable {
     , globalHead_(TaggedPtr{})
   {
     const size_t needed = sizeof(Slot) * (actualCapacity_ + 1);
-    size_t pagesize = sysconf(_SC_PAGESIZE);
+    size_t pagesize = size_t(sysconf(_SC_PAGESIZE));
     mmapLength_ = ((needed - 1) & ~(pagesize - 1)) + pagesize;
     assert(needed <= mmapLength_ && mmapLength_ < needed + pagesize);
     assert((mmapLength_ % pagesize) == 0);
@@ -146,7 +150,11 @@ struct IndexedMemPool : boost::noncopyable {
   /// Destroys all of the contained elements
   ~IndexedMemPool() {
     if (!eagerRecycle()) {
-      for (size_t i = size_; i > 0; --i) {
+      // Take the minimum since it is possible that size_ > actualCapacity_.
+      // This can happen if there are multiple concurrent requests
+      // when size_ == actualCapacity_ - 1.
+      uint32_t last = std::min(uint32_t(size_), uint32_t(actualCapacity_));
+      for (uint32_t i = last; i > 0; --i) {
         slots_[i].~Slot();
       }
     }
@@ -157,7 +165,7 @@ struct IndexedMemPool : boost::noncopyable {
   /// simultaneously allocated and not yet recycled.  Because of the
   /// local lists it is possible that more elements than this are returned
   /// successfully
-  size_t capacity() {
+  uint32_t capacity() {
     return capacityForMaxIndex(actualCapacity_);
   }
 
@@ -217,7 +225,7 @@ struct IndexedMemPool : boost::noncopyable {
 
     auto slot = reinterpret_cast<const Slot*>(
         reinterpret_cast<const char*>(elem) - offsetof(Slot, elem));
-    auto rv = slot - slots_;
+    auto rv = uint32_t(slot - slots_);
 
     // this assert also tests that rv is in range
     assert(elem == &(*this)[rv]);
@@ -226,7 +234,7 @@ struct IndexedMemPool : boost::noncopyable {
 
   /// Returns true iff idx has been alloc()ed and not recycleIndex()ed
   bool isAllocated(uint32_t idx) const {
-    return slot(idx).localNext == uint32_t(-1);
+    return slot(idx).localNext.load(std::memory_order_relaxed) == uint32_t(-1);
   }
 
 
@@ -235,8 +243,8 @@ struct IndexedMemPool : boost::noncopyable {
 
   struct Slot {
     T elem;
-    uint32_t localNext;
-    uint32_t globalNext;
+    Atom<uint32_t> localNext;
+    Atom<uint32_t> globalNext;
 
     Slot() : localNext{}, globalNext{} {}
   };
@@ -291,15 +299,15 @@ struct IndexedMemPool : boost::noncopyable {
 
   ////////// fields
 
+  /// the number of bytes allocated from mmap, which is a multiple of
+  /// the page size of the machine
+  size_t mmapLength_;
+
   /// the actual number of slots that we will allocate, to guarantee
   /// that we will satisfy the capacity requested at construction time.
   /// They will be numbered 1..actualCapacity_ (note the 1-based counting),
   /// and occupy slots_[1..actualCapacity_].
-  size_t actualCapacity_;
-
-  /// the number of bytes allocated from mmap, which is a multiple of
-  /// the page size of the machine
-  size_t mmapLength_;
+  uint32_t actualCapacity_;
 
   /// this records the number of slots that have actually been constructed.
   /// To allow use of atomic ++ instead of CAS, we let this overflow.
@@ -322,7 +330,7 @@ struct IndexedMemPool : boost::noncopyable {
 
   ///////////// private methods
 
-  size_t slotIndex(uint32_t idx) const {
+  uint32_t slotIndex(uint32_t idx) const {
     assert(0 < idx &&
            idx <= actualCapacity_ &&
            idx <= size_.load(std::memory_order_acquire));
@@ -342,7 +350,7 @@ struct IndexedMemPool : boost::noncopyable {
   void globalPush(Slot& s, uint32_t localHead) {
     while (true) {
       TaggedPtr gh = globalHead_.load(std::memory_order_acquire);
-      s.globalNext = gh.idx;
+      s.globalNext.store(gh.idx, std::memory_order_relaxed);
       if (globalHead_.compare_exchange_strong(gh, gh.withIdx(localHead))) {
         // success
         return;
@@ -355,7 +363,7 @@ struct IndexedMemPool : boost::noncopyable {
     Slot& s = slot(idx);
     TaggedPtr h = head.load(std::memory_order_acquire);
     while (true) {
-      s.localNext = h.idx;
+      s.localNext.store(h.idx, std::memory_order_relaxed);
 
       if (h.size() == LocalListLimit) {
         // push will overflow local list, steal it instead
@@ -379,8 +387,11 @@ struct IndexedMemPool : boost::noncopyable {
   uint32_t globalPop() {
     while (true) {
       TaggedPtr gh = globalHead_.load(std::memory_order_acquire);
-      if (gh.idx == 0 || globalHead_.compare_exchange_strong(
-                  gh, gh.withIdx(slot(gh.idx).globalNext))) {
+      if (gh.idx == 0 ||
+          globalHead_.compare_exchange_strong(
+              gh,
+              gh.withIdx(
+                  slot(gh.idx).globalNext.load(std::memory_order_relaxed)))) {
         // global list is empty, or pop was successful
         return gh.idx;
       }
@@ -394,10 +405,10 @@ struct IndexedMemPool : boost::noncopyable {
       if (h.idx != 0) {
         // local list is non-empty, try to pop
         Slot& s = slot(h.idx);
-        if (head.compare_exchange_strong(
-                    h, h.withIdx(s.localNext).withSizeDecr())) {
+        auto next = s.localNext.load(std::memory_order_relaxed);
+        if (head.compare_exchange_strong(h, h.withIdx(next).withSizeDecr())) {
           // success
-          s.localNext = uint32_t(-1);
+          s.localNext.store(uint32_t(-1), std::memory_order_relaxed);
           return h.idx;
         }
         continue;
@@ -417,15 +428,16 @@ struct IndexedMemPool : boost::noncopyable {
           T* ptr = &slot(idx).elem;
           new (ptr) T();
         }
-        slot(idx).localNext = uint32_t(-1);
+        slot(idx).localNext.store(uint32_t(-1), std::memory_order_relaxed);
         return idx;
       }
 
       Slot& s = slot(idx);
+      auto next = s.localNext.load(std::memory_order_relaxed);
       if (head.compare_exchange_strong(
-                  h, h.withIdx(s.localNext).withSize(LocalListLimit))) {
+              h, h.withIdx(next).withSize(LocalListLimit))) {
         // global list moved to local list, keep head for us
-        s.localNext = uint32_t(-1);
+        s.localNext.store(uint32_t(-1), std::memory_order_relaxed);
         return idx;
       }
       // local bulk push failed, return idx to the global list and try again

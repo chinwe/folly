@@ -1,4 +1,6 @@
 /*
+ * Copyright 2017-present Facebook, Inc.
+ *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements. See the NOTICE file
  * distributed with this work for additional information
@@ -16,7 +18,6 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-
 #include <folly/Memory.h>
 #include <folly/ScopeGuard.h>
 
@@ -46,6 +47,8 @@ using std::endl;
 using std::chrono::milliseconds;
 using std::chrono::microseconds;
 using std::chrono::duration_cast;
+
+using namespace std::chrono_literals;
 
 using namespace folly;
 
@@ -1176,11 +1179,6 @@ TEST(EventBaseTest, RunInThread) {
   for (uint32_t n = 0; n < numThreads; ++n) {
     ASSERT_EQ(expectedValues[n], opsPerThread);
   }
-
-  // Wait on all of the threads.
-  for (auto& thread: threads) {
-    thread.join();
-  }
 }
 
 //  This test simulates some calls, and verifies that the waiting happens by
@@ -1351,6 +1349,21 @@ TEST(EventBaseTest, RunInLoopStopLoop) {
   // this a hard API requirement.)
   ASSERT_GE(c1.getCount(), 10);
   ASSERT_LE(c1.getCount(), 11);
+}
+
+TEST(EventBaseTest, messageAvailableException) {
+  auto deadManWalking = [] {
+    EventBase eventBase;
+    std::thread t([&] {
+      // Call this from another thread to force use of NotificationQueue in
+      // runInEventBaseThread
+      eventBase.runInEventBaseThread(
+          []() { throw std::runtime_error("boom"); });
+    });
+    t.join();
+    eventBase.loopForever();
+  };
+  EXPECT_DEATH(deadManWalking(), ".*");
 }
 
 TEST(EventBaseTest, TryRunningAfterTerminate) {
@@ -1568,7 +1581,7 @@ class IdleTimeTimeoutSeries : public AsyncTimeout {
  */
 TEST(EventBaseTest, IdleTime) {
   EventBase eventBase;
-  eventBase.setLoadAvgMsec(1000);
+  eventBase.setLoadAvgMsec(1000ms);
   eventBase.resetLoadAvg(5900.0);
   std::deque<uint64_t> timeouts0(4, 8080);
   timeouts0.push_front(8000);
@@ -1581,30 +1594,25 @@ TEST(EventBaseTest, IdleTime) {
   bool hostOverloaded = false;
 
   int latencyCallbacks = 0;
-  eventBase.setMaxLatency(6000, [&]() {
+  eventBase.setMaxLatency(6000us, [&]() {
     ++latencyCallbacks;
-
-    switch (latencyCallbacks) {
-    case 1:
-      if (tos0.getTimeouts() < 6) {
-        // This could only happen if the host this test is running
-        // on is heavily loaded.
-        int64_t maxLatencyReached = duration_cast<microseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-        ASSERT_LE(43800, maxLatencyReached - testStart);
-        hostOverloaded = true;
-        break;
-      }
-      ASSERT_EQ(6, tos0.getTimeouts());
-      ASSERT_GE(6100, eventBase.getAvgLoopTime() - 1200);
-      ASSERT_LE(6100, eventBase.getAvgLoopTime() + 1200);
-      tos.reset(new IdleTimeTimeoutSeries(&eventBase, timeouts));
-      break;
-
-    default:
+    if (latencyCallbacks != 1) {
       FAIL() << "Unexpected latency callback";
-      break;
     }
+
+    if (tos0.getTimeouts() < 6) {
+      // This could only happen if the host this test is running
+      // on is heavily loaded.
+      int64_t maxLatencyReached = duration_cast<microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
+      ASSERT_LE(43800, maxLatencyReached - testStart);
+      hostOverloaded = true;
+      return;
+    }
+    ASSERT_EQ(6, tos0.getTimeouts());
+    ASSERT_GE(6100, eventBase.getAvgLoopTime() - 1200);
+    ASSERT_LE(6100, eventBase.getAvgLoopTime() + 1200);
+    tos.reset(new IdleTimeTimeoutSeries(&eventBase, timeouts));
   });
 
   // Kick things off with an "immedite" timeout
@@ -1658,7 +1666,7 @@ TEST(EventBaseTest, EventBaseThreadLoop) {
   });
   base.loop();
 
-  ASSERT_EQ(true, ran);
+  ASSERT_TRUE(ran);
 }
 
 TEST(EventBaseTest, EventBaseThreadName) {
@@ -1744,7 +1752,7 @@ TEST(EventBaseTest, LoopKeepAlive) {
   EventBase evb;
 
   bool done = false;
-  std::thread t([&, loopKeepAlive = evb.loopKeepAlive() ]() mutable {
+  std::thread t([&, loopKeepAlive = evb.getKeepAliveToken() ]() mutable {
     /* sleep override */ std::this_thread::sleep_for(
         std::chrono::milliseconds(100));
     evb.runInEventBaseThread(
@@ -1765,7 +1773,7 @@ TEST(EventBaseTest, LoopKeepAliveInLoop) {
   std::thread t;
 
   evb.runInEventBaseThread([&] {
-    t = std::thread([&, loopKeepAlive = evb.loopKeepAlive() ]() mutable {
+    t = std::thread([&, loopKeepAlive = evb.getKeepAliveToken() ]() mutable {
       /* sleep override */ std::this_thread::sleep_for(
           std::chrono::milliseconds(100));
       evb.runInEventBaseThread(
@@ -1793,9 +1801,9 @@ TEST(EventBaseTest, LoopKeepAliveWithLoopForever) {
 
   {
     auto* ev = evb.get();
-    EventBase::LoopKeepAlive keepAlive;
+    Executor::KeepAlive keepAlive;
     ev->runInEventBaseThreadAndWait(
-        [&ev, &keepAlive] { keepAlive = ev->loopKeepAlive(); });
+        [&ev, &keepAlive] { keepAlive = ev->getKeepAliveToken(); });
     ASSERT_FALSE(done) << "Loop finished before we asked it to";
     ev->terminateLoopSoon();
     /* sleep override */
@@ -1815,7 +1823,7 @@ TEST(EventBaseTest, LoopKeepAliveShutdown) {
 
   std::thread t([
     &done,
-    loopKeepAlive = evb->loopKeepAlive(),
+    loopKeepAlive = evb->getKeepAliveToken(),
     evbPtr = evb.get()
   ]() mutable {
     /* sleep override */ std::this_thread::sleep_for(
@@ -1829,6 +1837,51 @@ TEST(EventBaseTest, LoopKeepAliveShutdown) {
   ASSERT_TRUE(done);
 
   t.join();
+}
+
+TEST(EventBaseTest, LoopKeepAliveAtomic) {
+  auto evb = folly::make_unique<EventBase>();
+
+  static constexpr size_t kNumThreads = 100;
+  static constexpr size_t kNumTasks = 100;
+
+  std::vector<std::thread> ts;
+  std::vector<std::unique_ptr<Baton<>>> batons;
+  size_t done{0};
+
+  for (size_t i = 0; i < kNumThreads; ++i) {
+    batons.emplace_back(folly::make_unique<Baton<>>());
+  }
+
+  for (size_t i = 0; i < kNumThreads; ++i) {
+    ts.emplace_back([ evbPtr = evb.get(), batonPtr = batons[i].get(), &done ] {
+      std::vector<Executor::KeepAlive> keepAlives;
+      for (size_t j = 0; j < kNumTasks; ++j) {
+        keepAlives.emplace_back(evbPtr->getKeepAliveToken());
+      }
+
+      batonPtr->post();
+
+      /* sleep override */ std::this_thread::sleep_for(std::chrono::seconds(1));
+
+      for (auto& keepAlive : keepAlives) {
+        evbPtr->runInEventBaseThread(
+            [&done, keepAlive = std::move(keepAlive) ]() { ++done; });
+      }
+    });
+  }
+
+  for (auto& baton : batons) {
+    baton->wait();
+  }
+
+  evb.reset();
+
+  EXPECT_EQ(kNumThreads * kNumTasks, done);
+
+  for (auto& t : ts) {
+    t.join();
+  }
 }
 
 TEST(EventBaseTest, DrivableExecutorTest) {

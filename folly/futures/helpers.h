@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -226,6 +226,23 @@ auto collectAny(Collection&& c) -> decltype(collectAny(c.begin(), c.end())) {
   return collectAny(c.begin(), c.end());
 }
 
+/** Similar to collectAny, collectAnyWithoutException return the first Future to
+ * complete without exceptions. If none of the future complete without
+ * excpetions, the last exception will be returned as a result.
+  */
+template <class InputIterator>
+Future<std::pair<
+    size_t,
+    typename std::iterator_traits<InputIterator>::value_type::value_type>>
+collectAnyWithoutException(InputIterator first, InputIterator last);
+
+/// Sugar for the most common case
+template <class Collection>
+auto collectAnyWithoutException(Collection&& c)
+    -> decltype(collectAnyWithoutException(c.begin(), c.end())) {
+  return collectAnyWithoutException(c.begin(), c.end());
+}
+
 /** when n Futures have completed, the Future completes with a vector of
   the index and Try of those n Futures (the indices refer to the original
   order, but the result vector will be in an arbitrary order)
@@ -346,6 +363,9 @@ namespace futures {
  *  indicating that the failure was transitory.
  *
  *  Cancellation is not supported.
+ *
+ *  If both FF and Policy inline executes, then it is possible to hit a stack
+ *  overflow due to the recursive nature of the retry implementation
  */
 template <class Policy, class FF>
 typename std::result_of<FF(size_t)>::type

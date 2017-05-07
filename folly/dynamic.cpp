@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +15,10 @@
  */
 
 #include <folly/dynamic.h>
+
+#include <folly/Assume.h>
 #include <folly/Hash.h>
+#include <folly/portability/BitsFunctexcept.h>
 
 namespace folly {
 
@@ -26,7 +29,7 @@ namespace folly {
   constexpr dynamic::Type dynamic::TypeInfo<T>::type; \
   //
 
-FOLLY_DYNAMIC_DEF_TYPEINFO(void*)
+FOLLY_DYNAMIC_DEF_TYPEINFO(std::nullptr_t)
 FOLLY_DYNAMIC_DEF_TYPEINFO(bool)
 FOLLY_DYNAMIC_DEF_TYPEINFO(std::string)
 FOLLY_DYNAMIC_DEF_TYPEINFO(dynamic::Array)
@@ -62,7 +65,7 @@ TypeError::~TypeError() = default;
   do {                                \
     switch ((type)) {                 \
       case NULLT:                     \
-        apply(void*);                 \
+        apply(std::nullptr_t);        \
         break;                        \
       case ARRAY:                     \
         apply(Array);                 \
@@ -205,7 +208,7 @@ const dynamic* dynamic::get_ptr(dynamic const& idx) const& {
     if (idx < 0 || idx >= parray->size()) {
       return nullptr;
     }
-    return &(*parray)[idx.asInt()];
+    return &(*parray)[size_t(idx.asInt())];
   } else if (auto* pobject = get_nothrow<ObjectImpl>()) {
     auto it = pobject->find(idx);
     if (it == pobject->end()) {
@@ -223,9 +226,9 @@ dynamic const& dynamic::at(dynamic const& idx) const& {
       throw TypeError("int64", idx.type());
     }
     if (idx < 0 || idx >= parray->size()) {
-      throw std::out_of_range("out of range in dynamic array");
+      std::__throw_out_of_range("out of range in dynamic array");
     }
-    return (*parray)[idx.asInt()];
+    return (*parray)[size_t(idx.asInt())];
   } else if (auto* pobject = get_nothrow<ObjectImpl>()) {
     auto it = pobject->find(idx);
     if (it == pobject->end()) {
@@ -251,8 +254,7 @@ std::size_t dynamic::size() const {
   throw TypeError("array/object", type());
 }
 
-dynamic::const_iterator
-dynamic::erase(const_iterator first, const_iterator last) {
+dynamic::iterator dynamic::erase(const_iterator first, const_iterator last) {
   auto& arr = get<Array>();
   return get<Array>().erase(
     arr.begin() + (first - arr.begin()),
@@ -276,9 +278,8 @@ std::size_t dynamic::hash() const {
     const auto& str = getString();
     return ::folly::hash::fnv32_buf(str.data(), str.size());
   }
-  default:
-    CHECK(0); abort();
   }
+  assume_unreachable();
 }
 
 char const* dynamic::typeName(Type t) {

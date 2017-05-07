@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -56,7 +56,7 @@ static std::string decodeString(Cursor& curs) {
   if (len < 0) {
     throw std::range_error("string length must not be negative");
   }
-  str.reserve(len);
+  str.reserve(size_t(len));
 
   size_t available = curs.length();
   while (available < (size_t)len) {
@@ -73,8 +73,8 @@ static std::string decodeString(Cursor& curs) {
     available = curs.length();
   }
 
-  str.append(reinterpret_cast<const char*>(curs.data()), len);
-  curs.skipAtMost(len);
+  str.append(reinterpret_cast<const char*>(curs.data()), size_t(len));
+  curs.skipAtMost(size_t(len));
   return str;
 }
 
@@ -101,7 +101,7 @@ static dynamic decodeObject(Cursor& curs) {
 }
 
 static dynamic decodeTemplate(Cursor& curs) {
-  std::vector<dynamic> arr;
+  dynamic arr = folly::dynamic::array;
 
   // List of property names
   if ((BserType)curs.read<int8_t>() != BserType::Array) {
@@ -110,7 +110,6 @@ static dynamic decodeTemplate(Cursor& curs) {
   auto names = decodeArray(curs);
 
   auto size = decodeInt(curs);
-  arr.reserve(size);
 
   while (size-- > 0) {
     dynamic obj = dynamic::object;
@@ -126,10 +125,10 @@ static dynamic decodeTemplate(Cursor& curs) {
       obj[name.getString()] = parseBser(curs);
     }
 
-    arr.emplace_back(std::move(obj));
+    arr.push_back(std::move(obj));
   }
 
-  return dynamic(std::move(arr));
+  return arr;
 }
 
 static dynamic parseBser(Cursor& curs) {

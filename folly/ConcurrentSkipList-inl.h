@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -41,11 +41,12 @@ template<typename ValT, typename NodeT> class csl_iterator;
 
 template<typename T>
 class SkipListNode : private boost::noncopyable {
-  enum {
+  enum : uint16_t {
     IS_HEAD_NODE = 1,
     MARKED_FOR_REMOVAL = (1 << 1),
     FULLY_LINKED = (1 << 2),
   };
+
  public:
   typedef T value_type;
 
@@ -59,7 +60,7 @@ class SkipListNode : private boost::noncopyable {
       height * sizeof(std::atomic<SkipListNode*>);
     auto* node = static_cast<SkipListNode*>(alloc.allocate(size));
     // do placement new
-    new (node) SkipListNode(height, std::forward<U>(data), isHead);
+    new (node) SkipListNode(uint8_t(height), std::forward<U>(data), isHead);
     return node;
   }
 
@@ -70,16 +71,15 @@ class SkipListNode : private boost::noncopyable {
   }
 
   template<typename NodeAlloc>
-  static constexpr bool destroyIsNoOp() {
-    return IsArenaAllocator<NodeAlloc>::value &&
-           boost::has_trivial_destructor<SkipListNode>::value;
-  }
+  struct DestroyIsNoOp : std::integral_constant<bool,
+    IsArenaAllocator<NodeAlloc>::value &&
+    boost::has_trivial_destructor<SkipListNode>::value> { };
 
   // copy the head node to a new head node assuming lock acquired
   SkipListNode* copyHead(SkipListNode* node) {
     DCHECK(node != nullptr && height_ > node->height_);
     setFlags(node->getFlags());
-    for (int i = 0; i < node->height_; ++i) {
+    for (uint8_t i = 0; i < node->height_; ++i) {
       setSkip(i, node->skip(i));
     }
     return this;
@@ -118,13 +118,13 @@ class SkipListNode : private boost::noncopyable {
   bool isHeadNode() const       { return getFlags() & IS_HEAD_NODE; }
 
   void setIsHeadNode() {
-    setFlags(getFlags() | IS_HEAD_NODE);
+    setFlags(uint16_t(getFlags() | IS_HEAD_NODE));
   }
   void setFullyLinked() {
-    setFlags(getFlags() | FULLY_LINKED);
+    setFlags(uint16_t(getFlags() | FULLY_LINKED));
   }
   void setMarkedForRemoval() {
-    setFlags(getFlags() | MARKED_FOR_REMOVAL);
+    setFlags(uint16_t(getFlags() | MARKED_FOR_REMOVAL));
   }
 
  private:
@@ -230,7 +230,7 @@ class NodeRecycler;
 
 template<typename NodeType, typename NodeAlloc>
 class NodeRecycler<NodeType, NodeAlloc, typename std::enable_if<
-  !NodeType::template destroyIsNoOp<NodeAlloc>()>::type> {
+  !NodeType::template DestroyIsNoOp<NodeAlloc>::value>::type> {
  public:
   explicit NodeRecycler(const NodeAlloc& alloc)
     : refs_(0), dirty_(false), alloc_(alloc) { lock_.init(); }
@@ -316,7 +316,7 @@ class NodeRecycler<NodeType, NodeAlloc, typename std::enable_if<
 // to save on ConcurrentSkipList size.
 template<typename NodeType, typename NodeAlloc>
 class NodeRecycler<NodeType, NodeAlloc, typename std::enable_if<
-  NodeType::template destroyIsNoOp<NodeAlloc>()>::type> {
+  NodeType::template DestroyIsNoOp<NodeAlloc>::value>::type> {
  public:
   explicit NodeRecycler(const NodeAlloc& alloc) : alloc_(alloc) { }
 

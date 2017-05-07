@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,16 +21,16 @@
 #endif
 
 #include <folly/SpookyHashV1.h>
-#include <folly/Benchmark.h>
+#include <folly/portability/GTest.h>
+#include <folly/portability/Time.h>
 
 #include <cinttypes>
 #include <cstdio>
 #include <cstddef>
 #include <cstring>
 #include <cstdlib>
-#include <ctime>
 
-#include <gtest/gtest.h>
+#include <glog/logging.h>
 
 using namespace ::folly::hash;
 

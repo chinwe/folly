@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@
 #include <stdexcept>
 
 #include <folly/Hash.h>
+#include <folly/Optional.h>
 #include <folly/Range.h>
 #include <folly/detail/IPAddress.h>
 
@@ -99,6 +100,13 @@ class IPAddressV6 {
     addr.setFromBinary(bytes);
     return addr;
   }
+
+  /**
+   * Create a new IPAddress instance from the ip6.arpa representation.
+   * @throws IPAddressFormatException if the input is not a valid ip6.arpa
+   * representation
+   */
+  static IPAddressV6 fromInverseArpaName(const std::string& arpaname);
 
   /**
    * Returns the address as a Range.
@@ -210,6 +218,16 @@ class IPAddressV6 {
   bool isLinkLocal() const;
 
   /**
+   * Return the mac address if this is a link-local IPv6 address.
+   *
+   * @return an Optional<MacAddress> union representing the mac address.
+   *
+   * If the address is not a link-local one it will return an empty Optional.
+   * You can use Optional::value() to check whether the mac address is not null.
+   */
+  Optional<MacAddress> getMacAddressFromLinkLocal() const;
+
+  /**
    * Return true if this is a multicast address.
    */
   bool isMulticast() const;
@@ -263,11 +281,13 @@ class IPAddressV6 {
   // @see IPAddress#toFullyQualified
   std::string toFullyQualified() const;
 
+  std::string toInverseArpaName() const;
+
   // @see IPAddress#str
   std::string str() const;
 
   // @see IPAddress#version
-  size_t version() const { return 6; }
+  uint8_t version() const { return 6; }
 
   /**
    * Return the solicited-node multicast address for this address.

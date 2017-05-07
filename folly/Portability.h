@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,10 +23,6 @@
 #include <folly/portability/Config.h>
 
 #include <folly/CPortability.h>
-
-#if FOLLY_HAVE_SCHED_H
- #include <sched.h>
-#endif
 
 // Unaligned loads and stores
 namespace folly {
@@ -74,22 +70,13 @@ constexpr bool kHasUnalignedAccess = false;
 # define FOLLY_DEPRECATED(msg)
 #endif
 
-// noinline
-#ifdef _MSC_VER
-# define FOLLY_NOINLINE __declspec(noinline)
+// warn unused result
+#if defined(_MSC_VER) && (_MSC_VER >= 1700)
+#define FOLLY_WARN_UNUSED_RESULT _Check_return_
 #elif defined(__clang__) || defined(__GNUC__)
-# define FOLLY_NOINLINE __attribute__((__noinline__))
+#define FOLLY_WARN_UNUSED_RESULT __attribute__((__warn_unused_result__))
 #else
-# define FOLLY_NOINLINE
-#endif
-
-// always inline
-#ifdef _MSC_VER
-# define FOLLY_ALWAYS_INLINE __forceinline
-#elif defined(__clang__) || defined(__GNUC__)
-# define FOLLY_ALWAYS_INLINE inline __attribute__((__always_inline__))
-#else
-# define FOLLY_ALWAYS_INLINE inline
+#define FOLLY_WARN_UNUSED_RESULT
 #endif
 
 // target
@@ -118,6 +105,27 @@ constexpr bool kHasUnalignedAccess = false;
 # define FOLLY_PPC64 0
 #endif
 
+namespace folly {
+constexpr bool kIsArchAmd64 = FOLLY_X64 == 1;
+constexpr bool kIsArchAArch64 = FOLLY_A64 == 1;
+constexpr bool kIsArchPPC64 = FOLLY_PPC64 == 1;
+}
+
+namespace folly {
+
+#if FOLLY_SANITIZE_ADDRESS
+constexpr bool kIsSanitizeAddress = true;
+#else
+constexpr bool kIsSanitizeAddress = false;
+#endif
+
+#if FOLLY_SANITIZE_THREAD
+constexpr bool kIsSanitizeThread = true;
+#else
+constexpr bool kIsSanitizeThread = false;
+#endif
+}
+
 // packing is very ugly in msvc
 #ifdef _MSC_VER
 # define FOLLY_PACK_ATTR /**/
@@ -143,12 +151,10 @@ constexpr bool kHasUnalignedAccess = false;
 #elif defined(__clang__) || defined(__GNUC__)
 # define FOLLY_PUSH_WARNING _Pragma("GCC diagnostic push")
 # define FOLLY_POP_WARNING _Pragma("GCC diagnostic pop")
-#define FOLLY_GCC_DISABLE_WARNING_INTERNAL3(warningName) #warningName
-#define FOLLY_GCC_DISABLE_WARNING_INTERNAL2(warningName) \
-  FOLLY_GCC_DISABLE_WARNING_INTERNAL3(warningName)
-#define FOLLY_GCC_DISABLE_WARNING(warningName)                       \
-  _Pragma(FOLLY_GCC_DISABLE_WARNING_INTERNAL2(GCC diagnostic ignored \
-          FOLLY_GCC_DISABLE_WARNING_INTERNAL3(-W##warningName)))
+# define FOLLY_GCC_DISABLE_WARNING_INTERNAL2(warningName) #warningName
+# define FOLLY_GCC_DISABLE_WARNING(warningName) \
+  _Pragma(                                      \
+  FOLLY_GCC_DISABLE_WARNING_INTERNAL2(GCC diagnostic ignored warningName))
 // Disable the MSVC warnings.
 # define FOLLY_MSVC_DISABLE_WARNING(warningNumber)
 #else
@@ -158,16 +164,12 @@ constexpr bool kHasUnalignedAccess = false;
 # define FOLLY_MSVC_DISABLE_WARNING(warningNumber)
 #endif
 
-// portable version check
-#ifndef __GNUC_PREREQ
-# if defined __GNUC__ && defined __GNUC_MINOR__
-/* nolint */
-#  define __GNUC_PREREQ(maj, min) ((__GNUC__ << 16) + __GNUC_MINOR__ >= \
-                                   ((maj) << 16) + (min))
-# else
-/* nolint */
-#  define __GNUC_PREREQ(maj, min) 0
-# endif
+#ifdef HAVE_SHADOW_LOCAL_WARNINGS
+#define FOLLY_GCC_DISABLE_NEW_SHADOW_WARNINGS        \
+  FOLLY_GCC_DISABLE_WARNING("-Wshadow-compatible-local") \
+  FOLLY_GCC_DISABLE_WARNING("-Wshadow-local")
+#else
+#define FOLLY_GCC_DISABLE_NEW_SHADOW_WARNINGS /* empty */
 #endif
 
 #if defined(__GNUC__) && !defined(__APPLE__) && !__GNUC_PREREQ(4,9)
@@ -222,41 +224,13 @@ namespace std { typedef ::max_align_t max_align_t; }
 // If the new c++ ABI is used, __cxx11 inline namespace needs to be added to
 // some types, e.g. std::list.
 #if _GLIBCXX_USE_CXX11_ABI
-# define FOLLY_GLIBCXX_NAMESPACE_CXX11_BEGIN _GLIBCXX_BEGIN_NAMESPACE_CXX11
+#define FOLLY_GLIBCXX_NAMESPACE_CXX11_BEGIN \
+  inline _GLIBCXX_BEGIN_NAMESPACE_CXX11
 # define FOLLY_GLIBCXX_NAMESPACE_CXX11_END   _GLIBCXX_END_NAMESPACE_CXX11
 #else
 # define FOLLY_GLIBCXX_NAMESPACE_CXX11_BEGIN
 # define FOLLY_GLIBCXX_NAMESPACE_CXX11_END
 #endif
-
-// Provide our own std::__throw_* wrappers for platforms that don't have them
-#if FOLLY_HAVE_BITS_FUNCTEXCEPT_H
-#include <bits/functexcept.h>
-#else
-#include <folly/detail/FunctionalExcept.h>
-#endif
-
-#if defined(__cplusplus)
-// Unfortunately, boost::has_trivial_copy<T> is broken in libc++ due to its
-// usage of __has_trivial_copy(), so we can't use it as a
-// least-common-denominator for C++11 implementations that don't support
-// std::is_trivially_copyable<T>.
-//
-//      http://stackoverflow.com/questions/12754886/has-trivial-copy-behaves-differently-in-clang-and-gcc-whos-right
-//
-// As a result, use std::is_trivially_copyable() where it exists, and fall back
-// to Boost otherwise.
-#if FOLLY_HAVE_STD__IS_TRIVIALLY_COPYABLE
-#include <type_traits>
-#define FOLLY_IS_TRIVIALLY_COPYABLE(T)                   \
-  (std::is_trivially_copyable<T>::value)
-#else
-#include <boost/type_traits.hpp>
-#define FOLLY_IS_TRIVIALLY_COPYABLE(T)                   \
-  (boost::has_trivial_copy<T>::value &&                  \
-   boost::has_trivial_destructor<T>::value)
-#endif
-#endif // __cplusplus
 
 // MSVC specific defines
 // mainly for posix compat
@@ -357,9 +331,21 @@ using namespace FOLLY_GFLAGS_NAMESPACE;
 
 namespace folly {
 
+#if __OBJC__
+constexpr auto kIsObjC = true;
+#else
+constexpr auto kIsObjC = false;
+#endif
+
 #if defined(__linux__) && !FOLLY_MOBILE
 constexpr auto kIsLinux = true;
 #else
 constexpr auto kIsLinux = false;
+#endif
+
+#if defined(_WIN32)
+constexpr auto kIsWindows = true;
+#else
+constexpr auto kIsWindows = false;
 #endif
 }

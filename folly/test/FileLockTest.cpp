@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@
 #include <mutex>
 
 #include <glog/logging.h>
-#include <gtest/gtest.h>
 #include <boost/thread/locks.hpp>
 
 #include <folly/String.h>
@@ -27,6 +26,7 @@
 #include <folly/experimental/TestUtil.h>
 #include <folly/experimental/io/FsUtil.h>
 #include <folly/portability/GFlags.h>
+#include <folly/portability/GTest.h>
 
 using namespace folly;
 using namespace folly::test;

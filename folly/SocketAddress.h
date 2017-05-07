@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -151,7 +151,11 @@ class SocketAddress {
   bool isLoopbackAddress() const;
 
   void reset() {
-    prepFamilyChange(AF_UNSPEC);
+    if (external_) {
+      storage_.un.free();
+    }
+    storage_.addr = folly::IPAddress();
+    external_ = false;
   }
 
   /**
@@ -388,7 +392,7 @@ class SocketAddress {
 
   sa_family_t getFamily() const {
     DCHECK(external_ || AF_UNIX != storage_.addr.family());
-    return external_ ? AF_UNIX : storage_.addr.family();
+    return external_ ? sa_family_t(AF_UNIX) : storage_.addr.family();
   }
 
   bool empty() const {
@@ -410,6 +414,11 @@ class SocketAddress {
    * the address is not an IPv4 or IPv6 address).
    */
   void getAddressStr(char* buf, size_t buflen) const;
+
+  /**
+   * Return true if it is a valid IPv4 or IPv6 address.
+   */
+  bool isFamilyInet() const;
 
   /**
    * For v4 & v6 addresses, return the fully qualified address string
@@ -539,7 +548,7 @@ class SocketAddress {
     static constexpr uint64_t kMagic = 0x1234faceb00c;
 
     socklen_t pathLength() const {
-      return len - offsetof(struct sockaddr_un, sun_path);
+      return socklen_t(len - offsetof(struct sockaddr_un, sun_path));
     }
 
     void init() {
@@ -552,7 +561,7 @@ class SocketAddress {
       addr = new sockaddr_un;
       magic = kMagic;
       len = other.len;
-      memcpy(addr, other.addr, len);
+      memcpy(addr, other.addr, size_t(len));
       // Fill the rest with 0s, just for safety
       memset(reinterpret_cast<char*>(addr) + len, 0,
              sizeof(struct sockaddr_un) - len);
@@ -560,7 +569,7 @@ class SocketAddress {
     void copy(const ExternalUnixAddr &other) {
       CHECK(magic == kMagic);
       len = other.len;
-      memcpy(addr, other.addr, len);
+      memcpy(addr, other.addr, size_t(len));
     }
     void free() {
       CHECK(magic == kMagic);
@@ -578,21 +587,6 @@ class SocketAddress {
   void getIpString(char *buf, size_t buflen, int flags) const;
 
   void updateUnixAddressLength(socklen_t addrlen);
-
-  void prepFamilyChange(sa_family_t newFamily) {
-    if (newFamily != AF_UNIX) {
-      if (external_) {
-        storage_.un.free();
-        storage_.addr = folly::IPAddress();
-      }
-      external_ = false;
-    } else {
-      if (!external_) {
-        storage_.un.init();
-      }
-      external_ = true;
-    }
-  }
 
   /*
    * storage_ contains room for a full IPv4 or IPv6 address, so they can be

@@ -150,7 +150,7 @@ the lock as soon as possible.
 `Synchronized` is a template with two parameters, the data type and a
 mutex type: `Synchronized<T, Mutex>`.
 
-If not specified, the mutex type defaults to `std::mutex`.  However, any
+If not specified, the mutex type defaults to `folly::SharedMutex`.  However, any
 mutex type supported by `folly::LockTraits` can be used instead.
 `folly::LockTraits` can be specialized to support other custom mutex
 types that it does not know about out of the box.  See
@@ -158,15 +158,16 @@ types that it does not know about out of the box.  See
 types.
 
 `Synchronized` provides slightly different APIs when instantiated with a
-shared mutex type than with a plain exclusive mutex type.  When used with
-a shared mutex type, it has separate `wlock()` and `rlock()` methods,
-rather than a single `lock()` method.  Similarly, it has `withWLock()`
-and `withRLock()` rather than `withLock()`.  When using a shared mutex
-type, these APIs ensure that callers make an explicit choice to acquire
-the a shared or an exclusive lock, and that callers do not
-unintentionally lock the mutex in the incorrect mode.  The `rlock()`
-APIs only provide `const` access to the underlying data type, ensuring
-that it cannot be modified when only holding a shared lock.
+shared mutex type or an upgrade mutex type then with a plain exclusive mutex.
+If instantiated with either of the two mutex types above (either through
+having a member called lock_shared() or specializing `LockTraits` as in
+`folly/LockTraitsBoost.h`) the `Synchronized` object has corresponding
+`wlock`, `rlock` or `ulock` methods to acquire different lock types.  When
+using a shared or upgrade mutex type, these APIs ensure that callers make an
+explicit choice to acquire a shared, exclusive or upgrade lock and that
+callers do not unintentionally lock the mutex in the incorrect mode.  The
+`rlock()` APIs only provide `const` access to the underlying data type,
+ensuring that it cannot be modified when only holding a shared lock.
 
 #### Constructors
 
@@ -365,6 +366,203 @@ This code does not have the same problem as the counter-example with
 When using `Synchronized` with a shared mutex type, it provides separate
 `withWLock()` and `withRLock()` methods instead of `withLock()`.
 
+#### `ulock()` and `withULockPtr()`
+
+`Synchronized` also supports upgrading and downgrading mutex lock levels as
+long as the mutex type used to instantiate the `Synchronized` type has the
+same interface as the mutex types in the C++ standard library, or if
+`LockTraits` is specialized for the mutex type and the specialization is
+visible. See below for an intro to upgrade mutexes.
+
+An upgrade lock can be acquired as usual either with the `ulock()` method or
+the `withULockPtr()` method as so
+
+``` Cpp
+    {
+      // only const access allowed to the underlying object when an upgrade lock
+      // is acquired
+      auto ulock = vec.ulock();
+      auto newSize = ulock->size();
+    }
+
+    auto newSize = vec.withULockPtr([](auto ulock) {
+      // only const access allowed to the underlying object when an upgrade lock
+      // is acquired
+      return ulock->size();
+    });
+```
+
+An upgrade lock acquired via `ulock()` or `withULockPtr()` can be upgraded or
+downgraded by calling any of the following methods on the `LockedPtr` proxy
+
+* `moveFromUpgradeToWrite()`
+* `moveFromWriteToUpgrade()`
+* `moveFromWriteToRead()`
+* `moveFromUpgradeToRead()`
+
+Calling these leaves the `LockedPtr` object on which the method was called in
+an invalid `null` state and returns another LockedPtr proxy holding the
+specified lock.  The upgrade or downgrade is done atomically - the
+`Synchronized` object is never in an unlocked state during the lock state
+transition.  For example
+
+``` Cpp
+    auto ulock = obj.ulock();
+    if (ulock->needsUpdate()) {
+      auto wlock = ulock.moveFromUpgradeToWrite();
+
+      // ulock is now null
+
+      wlock->updateObj();
+    }
+```
+
+This "move" can also occur in the context of a `withULockPtr()`
+(`withWLockPtr()` or `withRLockPtr()` work as well!) function as so
+
+``` Cpp
+    auto newSize = obj.withULockPtr([](auto ulock) {
+      if (ulock->needsUpdate()) {
+
+        // release upgrade lock get write lock atomically
+        auto wlock = ulock.moveFromUpgradeToWrite();
+        // ulock is now null
+        wlock->updateObj();
+
+        // release write lock and acquire read lock atomically
+        auto rlock = wlock.moveFromWriteToRead();
+        // wlock is now null
+        return rlock->newSize();
+
+      } else {
+
+        // release upgrade lock and acquire read lock atomically
+        auto rlock = ulock.moveFromUpgradeToRead();
+        // ulock is now null
+        return rlock->newSize();
+      }
+    });
+```
+
+#### Intro to upgrade mutexes:
+
+An upgrade mutex is a shared mutex with an extra state called `upgrade` and an
+atomic state transition from `upgrade` to `unique`. The `upgrade` state is more
+powerful than the `shared` state but less powerful than the `unique` state.
+
+An upgrade lock permits only const access to shared state for doing reads. It
+does not permit mutable access to shared state for doing writes. Only a unique
+lock permits mutable access for doing writes.
+
+An upgrade lock may be held concurrently with any number of shared locks on the
+same mutex. An upgrade lock is exclusive with other upgrade locks and unique
+locks on the same mutex - only one upgrade lock or unique lock may be held at a
+time.
+
+The upgrade mutex solves the problem of doing a read of shared state and then
+optionally doing a write to shared state efficiently under contention. Consider
+this scenario with a shared mutex:
+
+``` Cpp
+    struct MyObect {
+      bool isUpdateRequired() const;
+      void doUpdate();
+    };
+
+    struct MyContainingObject {
+      folly::Synchronized<MyObject> sync;
+
+      void mightHappenConcurrently() {
+        // first check
+        if (!sync.rlock()->isUpdateRequired()) {
+          return;
+        }
+        sync.withWLock([&](auto& state) {
+          // second check
+          if (!state.isUpdateRequired()) {
+            return;
+          }
+          state.doUpdate();
+        });
+      }
+    };
+```
+
+Here, the second `isUpdateRequired` check happens under a unique lock. This
+means that the second check cannot be done concurrently with other threads doing
+first `isUpdateRequired` checks under the shared lock, even though the second
+check, like the first check, is read-only and requires only const access to the
+shared state.
+
+This may even introduce unnecessary blocking under contention. Since the default
+mutex type, `folly::SharedMutex`, has write priority, the unique lock protecting
+the second check may introduce unnecessary blocking to all the other threads
+that are attempting to acquire a shared lock to protect the first check. This
+problem is called reader starvation.
+
+One solution is to use a shared mutex type with read priority, such as
+`folly::SharedMutexReadPriority`. That can introduce less blocking under
+contention to the other threads attemping to acquire a shared lock to do the
+first check. However, that may backfire and cause threads which are attempting
+to acquire a unique lock (for the second check) to stall, waiting for a moment
+in time when there are no shared locks held on the mutex, a moment in time that
+may never even happen. This problem is called writer starvation.
+
+Starvation is a tricky problem to solve in general. But we can partially side-
+step it in our case.
+
+An alternative solution is to use an upgrade lock for the second check. Threads
+attempting to acquire an upgrade lock for the second check do not introduce
+unnecessary blocking to all other threads that are attempting to acquire a
+shared lock for the first check. Only after the second check passes, and the
+upgrade lock transitions atomically from an upgrade lock to a unique lock, does
+the unique lock introduce *necessary* blocking to the other threads attempting
+to acquire a shared lock. With this solution, unlike the solution without the
+upgrade lock, the second check may be done concurrently with all other first
+checks rather than blocking or being blocked by them.
+
+The example would then look like:
+
+``` Cpp
+    struct MyObect {
+      bool isUpdateRequired() const;
+      void doUpdate();
+    };
+
+    struct MyContainingObject {
+      folly::Synchronized<MyObject> sync;
+
+      void mightHappenConcurrently() {
+        // first check
+        if (!sync.rlock()->isUpdateRequired()) {
+          return;
+        }
+        sync.withULockPtr([&](auto ulock) {
+          // second check
+          if (!ulock->isUpdateRequired()) {
+            return;
+          }
+          auto wlock = ulock.moveFromUpgradeToWrite();
+          wlock->doUpdate();
+        });
+      }
+    };
+```
+
+Note: Some shared mutex implementations offer an atomic state transition from
+`shared` to `unique` and some upgrade mutex implementations offer an atomic
+state transition from `shared` to `upgrade`. These atomic state transitions are
+dangerous, however, and can deadlock when done concurrently on the same mutex.
+For example, if threads A and B both hold shared locks on a mutex and are both
+attempting to transition atomically from shared to upgrade locks, the threads
+are deadlocked. Likewise if they are both attempting to transition atomically
+from shared to unique locks, or one is attempting to transition atomically from
+shared to upgrade while the other is attempting to transition atomically from
+shared to unique. Therefore, `LockTraits` does not expose either of these
+dangerous atomic state transitions even when the underlying mutex type supports
+them. Likewise, `Synchronized`'s `LockedPtr` proxies do not expose these
+dangerous atomic state transitions either.
+
 #### Timed Locking
 
 When `Synchronized` is used with a mutex type that supports timed lock
@@ -471,8 +669,8 @@ The `LockedPtr` returned by `Synchronized<T, std::mutex>::lock()` has a
     // Assuming some other thread will put data on vec and signal
     // emptySignal, we can then wait on it as follows:
     auto locked = vec.lock();
-    emptySignal.wait_for(locked.getUniqueLock(),
-                         [&] { return !locked->empty(); });
+    emptySignal.wait(locked.getUniqueLock(),
+                     [&] { return !locked->empty(); });
 ```
 
 ### `acquireLocked()`
@@ -530,7 +728,7 @@ which will make the returned tuple more convenient to use:
 An `acquireLockedPair()` function is also available, which returns a
 `std::pair` instead of a `std::tuple`.  This is more convenient to use
 in many situations, until compiler support for structured bindings is
-more widely available. 
+more widely available.
 
 ### Synchronizing several data items with one mutex
 

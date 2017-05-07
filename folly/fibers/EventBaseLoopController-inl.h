@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,10 +24,15 @@ inline EventBaseLoopController::EventBaseLoopController()
 
 inline EventBaseLoopController::~EventBaseLoopController() {
   callback_.cancelLoopCallback();
+  eventBaseKeepAlive_.reset();
+}
+
+inline void EventBaseLoopController::attachEventBase(EventBase& eventBase) {
+  attachEventBase(eventBase.getVirtualEventBase());
 }
 
 inline void EventBaseLoopController::attachEventBase(
-    folly::EventBase& eventBase) {
+    VirtualEventBase& eventBase) {
   if (eventBase_ != nullptr) {
     LOG(ERROR) << "Attempt to reattach EventBase to LoopController";
   }
@@ -52,7 +57,11 @@ inline void EventBaseLoopController::schedule() {
     awaitingScheduling_ = true;
   } else {
     // Schedule it to run in current iteration.
-    eventBase_->runInLoop(&callback_, true);
+
+    if (!eventBaseKeepAlive_) {
+      eventBaseKeepAlive_ = eventBase_->getKeepAliveToken();
+    }
+    eventBase_->getEventBase().runInLoop(&callback_, true);
     awaitingScheduling_ = false;
   }
 }
@@ -62,10 +71,21 @@ inline void EventBaseLoopController::cancel() {
 }
 
 inline void EventBaseLoopController::runLoop() {
+  if (!eventBaseKeepAlive_) {
+    // runLoop can be called twice if both schedule() and scheduleThreadSafe()
+    // were called.
+    if (!fm_->hasTasks()) {
+      return;
+    }
+    eventBaseKeepAlive_ = eventBase_->getKeepAliveToken();
+  }
   if (loopRunner_) {
-    loopRunner_->run([&] { fm_->loopUntilNoReady(); });
+    loopRunner_->run([&] { fm_->loopUntilNoReadyImpl(); });
   } else {
-    fm_->loopUntilNoReady();
+    fm_->loopUntilNoReadyImpl();
+  }
+  if (!fm_->hasTasks()) {
+    eventBaseKeepAlive_.reset();
   }
 }
 
@@ -101,8 +121,8 @@ inline void EventBaseLoopController::timedSchedule(
           .count() +
       1;
   // If clock is not monotonic
-  delay_ms = std::max<decltype(delay_ms)>(delay_ms, 0L);
-  eventBase_->tryRunAfterDelay(func, delay_ms);
+  delay_ms = std::max<decltype(delay_ms)>(delay_ms, 0);
+  eventBase_->tryRunAfterDelay(func, uint32_t(delay_ms));
 }
 }
 } // folly::fibers

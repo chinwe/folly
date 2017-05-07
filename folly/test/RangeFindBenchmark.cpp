@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -139,13 +139,13 @@ template <class Func>
 void countHits(Func func, size_t n) {
   StringPiece needles = "\r\n\1";
   FOR_EACH_RANGE (i, 0, n) {
-    size_t p, n = 0;
+    size_t p, c = 0;
     for (StringPiece left = file;
          (p = func(left, needles)) != StringPiece::npos;
          left.advance(p + 1)) {
-      ++n;
+      ++c;
     }
-    doNotOptimizeAway(n);
+    doNotOptimizeAway(c);
   }
 }
 

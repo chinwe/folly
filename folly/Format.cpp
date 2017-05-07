@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -50,14 +50,14 @@ void FormatValue<double>::formatHelper(
   }
 
   // 2+: for null terminator and optional sign shenanigans.
-  constexpr size_t bufLen =
+  constexpr int bufLen =
       2 + constexpr_max(
               2 + DoubleToStringConverter::kMaxFixedDigitsBeforePoint +
                   DoubleToStringConverter::kMaxFixedDigitsAfterPoint,
               constexpr_max(8 + DoubleToStringConverter::kMaxExponentialDigits,
                             7 + DoubleToStringConverter::kMaxPrecisionDigits));
   char buf[bufLen];
-  StringBuilder builder(buf + 1, static_cast<int> (sizeof(buf) - 1));
+  StringBuilder builder(buf + 1, bufLen - 1);
 
   char plusSign;
   switch (arg.sign) {
@@ -159,7 +159,7 @@ void FormatValue<double>::formatHelper(
     prefixLen = 1;
   }
 
-  piece = fbstring(p, len);
+  piece = fbstring(p, size_t(len));
 }
 
 
@@ -168,7 +168,7 @@ void FormatArg::initSlow() {
   auto end = fullArgString.end();
 
   // Parse key
-  auto p = static_cast<const char*>(memchr(b, ':', end - b));
+  auto p = static_cast<const char*>(memchr(b, ':', size_t(end - b)));
   if (!p) {
     key_ = StringPiece(b, end);
     return;
@@ -294,7 +294,7 @@ void FormatArg::validate(Type type) const {
 
 namespace detail {
 void insertThousandsGroupingUnsafe(char* start_buffer, char** end_buffer) {
-  uint32_t remaining_digits = *end_buffer - start_buffer;
+  uint32_t remaining_digits = uint32_t(*end_buffer - start_buffer);
   uint32_t separator_size = (remaining_digits - 1) / 3;
   uint32_t result_size = remaining_digits + separator_size;
   *end_buffer = *end_buffer + separator_size;

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -54,10 +54,13 @@
  *  }
  */
 #include <cstddef>
+#include <functional>
 #include <new>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
+
+#include <folly/Portability.h>
 
 namespace folly {
 
@@ -66,17 +69,6 @@ namespace detail { struct NoneHelper {}; }
 typedef int detail::NoneHelper::*None;
 
 const None none = nullptr;
-
-/**
- * gcc-4.7 warns about use of uninitialized memory around the use of storage_
- * even though this is explicitly initialized at each point.
- */
-#if defined(__GNUC__) && !defined(__clang__)
-# pragma GCC diagnostic push
-# pragma GCC diagnostic ignored "-Wuninitialized"
-# pragma GCC diagnostic ignored "-Wpragmas"
-# pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
-#endif // __GNUC__
 
 class OptionalEmptyException : public std::runtime_error {
  public:
@@ -206,7 +198,12 @@ class Optional {
     return storage_.value;
   }
 
-  Value value() && {
+  Value&& value() && {
+    require_value();
+    return std::move(storage_.value);
+  }
+
+  const Value&& value() const&& {
     require_value();
     return std::move(storage_.value);
   }
@@ -225,9 +222,10 @@ class Optional {
     return hasValue();
   }
 
-  const Value& operator*() const&  { return value(); }
-        Value& operator*()      &  { return value(); }
-        Value  operator*()      && { return std::move(value()); }
+  const Value& operator*()  const&  { return value(); }
+        Value& operator*()       &  { return value(); }
+  const Value&& operator*() const&& { return std::move(value()); }
+        Value&& operator*()      && { return std::move(value()); }
 
   const Value* operator->() const { return &value(); }
         Value* operator->()       { return &value(); }
@@ -267,9 +265,18 @@ class Optional {
   }
 
   struct StorageTriviallyDestructible {
-    // uninitialized
-    union { Value value; };
-    bool hasValue;
+    // The union trick allows to initialize the Optional's memory,
+    // so that compiler/tools don't complain about uninitialized memory,
+    // without actually calling Value's default constructor.
+    // The rest of the implementation enforces that hasValue/value are
+    // synchronized.
+    union {
+      bool hasValue;
+      struct {
+        bool paddingForHasValue_[1];
+        Value value;
+      };
+    };
 
     StorageTriviallyDestructible() : hasValue{false} {}
 
@@ -279,15 +286,25 @@ class Optional {
   };
 
   struct StorageNonTriviallyDestructible {
-    // uninitialized
-    union { Value value; };
-    bool hasValue;
+    // See StorageTriviallyDestructible's union
+    union {
+      bool hasValue;
+      struct {
+        bool paddingForHasValue_[1];
+        Value value;
+      };
+    };
 
+    FOLLY_PUSH_WARNING
+    // These are both informational warnings, but they trigger rare enough
+    // that we've left them enabled.
+    FOLLY_MSVC_DISABLE_WARNING(4587) // constructor of .value is not called
+    FOLLY_MSVC_DISABLE_WARNING(4588) // destructor of .value is not called
     StorageNonTriviallyDestructible() : hasValue{false} {}
-
     ~StorageNonTriviallyDestructible() {
       clear();
     }
+    FOLLY_POP_WARNING
 
     void clear() {
       if (hasValue) {
@@ -304,10 +321,6 @@ class Optional {
 
   Storage storage_;
 };
-
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
 
 template<class T>
 const T* get_pointer(const Optional<T>& opt) {
@@ -406,3 +419,16 @@ template<class V> bool operator> (const V& other, const Optional<V>&) = delete;
 ///////////////////////////////////////////////////////////////////////////////
 
 } // namespace folly
+
+// Allow usage of Optional<T> in std::unordered_map and std::unordered_set
+FOLLY_NAMESPACE_STD_BEGIN
+template <class T>
+struct hash<folly::Optional<T>> {
+  size_t operator()(folly::Optional<T> const& obj) const {
+    if (!obj.hasValue()) {
+      return 0;
+    }
+    return hash<typename remove_const<T>::type>()(*obj);
+  }
+};
+FOLLY_NAMESPACE_STD_END

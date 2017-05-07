@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,11 +42,6 @@
 
 #ifdef CAL_GREGORIAN
 #undef CAL_GREGORIAN
-#endif
-
-// Defined in winnt.h
-#ifdef DELETE
-#undef DELETE
 #endif
 
 // Defined in the GDI interface.

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,13 +16,12 @@
 
 #include <folly/test/IPAddressTest.h>
 
-#include <gtest/gtest.h>
-
 #include <folly/Bits.h>
 #include <folly/Format.h>
 #include <folly/MacAddress.h>
 #include <folly/String.h>
 #include <folly/detail/IPAddressSource.h>
+#include <folly/portability/GTest.h>
 
 using namespace folly;
 using namespace std;
@@ -404,6 +403,28 @@ TEST(IPAddress, ToString) {
   EXPECT_EQ("1:2::3 - 10.0.0.1 - ::1 - 10.1.2.3",
             folly::to<string>(addr_1_2_3, " - ", addr_10_0_0_1,
                               " - ", addr_1, " - ", addr_10_1_2_3));
+}
+
+TEST(IPaddress, toInverseArpaName) {
+  IPAddressV4 addr_ipv4("10.0.0.1");
+  EXPECT_EQ("1.0.0.10.in-addr.arpa", addr_ipv4.toInverseArpaName());
+  IPAddressV6 addr_ipv6("2620:0000:1cfe:face:b00c:0000:0000:0003");
+  EXPECT_EQ(
+      sformat(
+          "{}.ip6.arpa",
+          "3.0.0.0.0.0.0.0.0.0.0.0.c.0.0.b.e.c.a.f.e.f.c.1.0.0.0.0.0.2.6.2"),
+      addr_ipv6.toInverseArpaName());
+}
+
+TEST(IPaddress, fromInverseArpaName) {
+  EXPECT_EQ(
+      IPAddressV4("10.0.0.1"),
+      IPAddressV4::fromInverseArpaName("1.0.0.10.in-addr.arpa"));
+  EXPECT_EQ(
+      IPAddressV6("2620:0000:1cfe:face:b00c:0000:0000:0003"),
+      IPAddressV6::fromInverseArpaName(sformat(
+          "{}.ip6.arpa",
+          "3.0.0.0.0.0.0.0.0.0.0.0.c.0.0.b.e.c.a.f.e.f.c.1.0.0.0.0.0.2.6.2")));
 }
 
 // Test that invalid string values are killed
@@ -892,7 +913,12 @@ TEST(IPAddress, InvalidBBitAccess) {
 TEST(IPAddress, StringFormat) {
   in6_addr a6;
   for (int i = 0; i < 8; ++i) {
-    a6.s6_addr16[i] = htons(0x0123 + ((i%4) * 0x4444));
+    auto t = htons(0x0123 + ((i % 4) * 0x4444));
+#ifdef _WIN32
+    a6.u.Word[i] = t;
+#else
+    a6.s6_addr16[i] = t;
+#endif
   }
   EXPECT_EQ("0123:4567:89ab:cdef:0123:4567:89ab:cdef",
             detail::fastIpv6ToString(a6));
@@ -900,6 +926,23 @@ TEST(IPAddress, StringFormat) {
   in_addr a4;
   a4.s_addr = htonl(0x01020304);
   EXPECT_EQ("1.2.3.4", detail::fastIpv4ToString(a4));
+}
+
+TEST(IPAddress, getMacAddressFromLinkLocal) {
+  IPAddressV6 ip6("fe80::f652:14ff:fec5:74d8");
+  EXPECT_TRUE(ip6.getMacAddressFromLinkLocal().hasValue());
+  EXPECT_EQ("f4:52:14:c5:74:d8", ip6.getMacAddressFromLinkLocal()->toString());
+}
+
+TEST(IPAddress, getMacAddressFromLinkLocal_Negative) {
+  IPAddressV6 no_link_local_ip6("2803:6082:a2:4447::1");
+  EXPECT_FALSE(no_link_local_ip6.getMacAddressFromLinkLocal().hasValue());
+  no_link_local_ip6 = IPAddressV6("fe80::f652:14ff:ccc5:74d8");
+  EXPECT_FALSE(no_link_local_ip6.getMacAddressFromLinkLocal().hasValue());
+  no_link_local_ip6 = IPAddressV6("fe80::f652:14ff:ffc5:74d8");
+  EXPECT_FALSE(no_link_local_ip6.getMacAddressFromLinkLocal().hasValue());
+  no_link_local_ip6 = IPAddressV6("fe81::f652:14ff:ffc5:74d8");
+  EXPECT_FALSE(no_link_local_ip6.getMacAddressFromLinkLocal().hasValue());
 }
 
 TEST(IPAddress, LongestCommonPrefix) {

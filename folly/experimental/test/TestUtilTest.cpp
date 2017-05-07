@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,18 +16,15 @@
 
 #include <folly/experimental/TestUtil.h>
 
-#include <sys/stat.h>
-#include <sys/types.h>
-
 #include <system_error>
 
 #include <boost/algorithm/string.hpp>
 #include <glog/logging.h>
-#include <gtest/gtest.h>
 
 #include <folly/Memory.h>
-#include <folly/portability/Environment.h>
 #include <folly/portability/Fcntl.h>
+#include <folly/portability/GTest.h>
+#include <folly/portability/Stdlib.h>
 
 using namespace folly;
 using namespace folly::test;
@@ -189,53 +186,4 @@ TEST(CaptureFD, ChunkCob) {
     EXPECT_PCRE_MATCH(".*foo.*bar.*baz.*", err.read());
   }
   EXPECT_EQ(2, chunks.size());
-}
-
-
-class EnvVarSaverTest : public testing::Test {};
-
-TEST_F(EnvVarSaverTest, ExampleNew) {
-  auto key = "hahahahaha";
-  EXPECT_EQ(nullptr, getenv(key));
-
-  PCHECK(0 == setenv(key, "", true));
-  EXPECT_STREQ("", getenv(key));
-  PCHECK(0 == unsetenv(key));
-  EXPECT_EQ(nullptr, getenv(key));
-
-  auto saver = make_unique<EnvVarSaver>();
-  PCHECK(0 == setenv(key, "blah", true));
-  EXPECT_EQ("blah", std::string{getenv(key)});
-  saver = nullptr;
-  EXPECT_EQ(nullptr, getenv(key));
-}
-
-TEST_F(EnvVarSaverTest, ExampleExisting) {
-  auto key = "PATH";
-  EXPECT_NE(nullptr, getenv(key));
-  auto value = std::string{getenv(key)};
-
-  auto saver = make_unique<EnvVarSaver>();
-  PCHECK(0 == setenv(key, "blah", true));
-  EXPECT_EQ("blah", std::string{getenv(key)});
-  saver = nullptr;
-  EXPECT_TRUE(value == getenv(key));
-}
-
-TEST_F(EnvVarSaverTest, ExampleDeleting) {
-  auto key = "PATH";
-  EXPECT_NE(nullptr, getenv(key));
-  auto value = std::string{getenv(key)};
-
-  auto saver = make_unique<EnvVarSaver>();
-  PCHECK(0 == unsetenv(key));
-  EXPECT_EQ(nullptr, getenv(key));
-  saver = nullptr;
-  EXPECT_TRUE(value == getenv(key));
-}
-
-int main(int argc, char *argv[]) {
-  testing::InitGoogleTest(&argc, argv);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  return RUN_ALL_TESTS();
 }

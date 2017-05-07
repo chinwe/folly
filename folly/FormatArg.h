@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -243,10 +243,10 @@ inline StringPiece FormatArg::doSplitKey() {
   const char* p;
   if (e[-1] == ']') {
     --e;
-    p = static_cast<const char*>(memchr(b, '[', e - b));
-    enforce(p, "unmatched ']'");
+    p = static_cast<const char*>(memchr(b, '[', size_t(e - b)));
+    enforce(p != nullptr, "unmatched ']'");
   } else {
-    p = static_cast<const char*>(memchr(b, '.', e - b));
+    p = static_cast<const char*>(memchr(b, '.', size_t(e - b)));
   }
   if (p) {
     key_.assign(p + 1, e);
@@ -267,7 +267,7 @@ inline int FormatArg::splitIntKey() {
   }
   try {
     return to<int>(doSplitKey<true>());
-  } catch (const std::out_of_range& e) {
+  } catch (const std::out_of_range&) {
     error("integer key required");
     return 0;  // unreached
   }

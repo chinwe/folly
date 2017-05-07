@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ namespace folly {
 
 namespace {
 
-fbstring submatch(const boost::cmatch& m, size_t idx) {
+fbstring submatch(const boost::cmatch& m, int idx) {
   auto& sub = m[idx];
   return fbstring(sub.first, sub.second);
 }
@@ -31,7 +31,7 @@ fbstring submatch(const boost::cmatch& m, size_t idx) {
 template <class String>
 void toLower(String& s) {
   for (auto& c : s) {
-    c = tolower(c);
+    c = char(tolower(c));
   }
 }
 

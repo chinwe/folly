@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,10 +16,8 @@
 
 #pragma once
 
+#include <cassert>
 #include <utility>
-#include <glog/logging.h>
-#include <folly/Likely.h>
-#include <folly/Portability.h>
 
 namespace folly {
 
@@ -60,10 +58,13 @@ template <typename T>
 class Indestructible final {
 
  public:
-  template <typename... Args>
+  template <typename S = T, typename = decltype(S())>
+  constexpr Indestructible() noexcept(noexcept(T())) {}
+
+  template <typename... Args, typename = decltype(T(std::declval<Args&&>()...))>
   explicit constexpr Indestructible(Args&&... args) noexcept(
-      std::is_nothrow_constructible<T, Args&&...>::value)
-      : storage_(std::forward<Args>(args)...), inited_(true) {}
+      noexcept(T(std::declval<Args&&>()...)))
+      : storage_(std::forward<Args>(args)...) {}
 
   ~Indestructible() = default;
 
@@ -71,51 +72,51 @@ class Indestructible final {
   Indestructible& operator=(Indestructible const&) = delete;
 
   Indestructible(Indestructible&& other) noexcept(
-      std::is_nothrow_move_constructible<T>::value)
+      noexcept(T(std::declval<T&&>())))
       : storage_(std::move(other.storage_.value)) {
-    other.inited_ = false;
+    other.erased_ = true;
   }
   Indestructible& operator=(Indestructible&& other) noexcept(
-      std::is_nothrow_move_assignable<T>::value) {
+      noexcept(T(std::declval<T&&>()))) {
     storage_.value = std::move(other.storage_.value);
-    other.inited_ = false;
+    other.erased_ = true;
   }
 
-  T* get() {
+  T* get() noexcept {
     check();
     return &storage_.value;
   }
-  T const* get() const {
+  T const* get() const noexcept {
     check();
     return &storage_.value;
   }
-  T& operator*() { return *get(); }
-  T const& operator*() const { return *get(); }
-  T* operator->() { return get(); }
-  T const* operator->() const { return get(); }
+  T& operator*() noexcept { return *get(); }
+  T const& operator*() const noexcept { return *get(); }
+  T* operator->() noexcept { return get(); }
+  T const* operator->() const noexcept { return get(); }
 
  private:
-  void check() const {
-    if (UNLIKELY(!inited_)) {
-      fail();
-    }
-  }
-
-  [[noreturn]] FOLLY_NOINLINE static void fail() {
-    LOG(FATAL) << "Indestructible is not initialized";
+  void check() const noexcept {
+    assert(!erased_);
   }
 
   union Storage {
     T value;
 
-    template <typename... Args>
-    explicit constexpr Storage(Args&&... args)
+    template <typename S = T, typename = decltype(S())>
+    constexpr Storage() noexcept(noexcept(T())) : value() {}
+
+    template <
+        typename... Args,
+        typename = decltype(T(std::declval<Args&&>()...))>
+    explicit constexpr Storage(Args&&... args) noexcept(
+        noexcept(T(std::declval<Args&&>()...)))
         : value(std::forward<Args>(args)...) {}
 
     ~Storage() {}
   };
 
-  Storage storage_;
-  bool inited_{false};
+  Storage storage_{};
+  bool erased_{false};
 };
 }

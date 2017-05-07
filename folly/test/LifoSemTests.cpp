@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,12 +19,11 @@
 #include <semaphore.h>
 #include <thread>
 
-#include <gtest/gtest.h>
-
 #include <folly/Benchmark.h>
 #include <folly/Random.h>
 #include <folly/portability/Asm.h>
 #include <folly/portability/GFlags.h>
+#include <folly/portability/GTest.h>
 #include <folly/test/DeterministicSchedule.h>
 
 using namespace folly;
@@ -197,7 +196,7 @@ TEST(LifoSem, shutdown_race) {
           a.wait();
           ++waitCount;
         }
-      } catch (ShutdownSemError& x) {
+      } catch (ShutdownSemError&) {
         // expected
         EXPECT_TRUE(a.isShutdown());
       }
@@ -229,7 +228,7 @@ TEST(LifoSem, shutdown_multi) {
         try {
           a.wait();
           EXPECT_TRUE(false);
-        } catch (ShutdownSemError& x) {
+        } catch (ShutdownSemError&) {
           // expected
           EXPECT_TRUE(a.isShutdown());
         }

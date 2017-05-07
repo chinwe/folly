@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@
 
 #include <folly/experimental/exception_tracer/ExceptionTracer.h>
 
-void bar() {
+[[noreturn]] void bar() {
   throw std::runtime_error("hello");
 }
 
@@ -45,7 +45,7 @@ void foo() {
   }
 }
 
-void baz() {
+[[noreturn]] void baz() {
   try {
     try {
       bar();
@@ -94,5 +94,5 @@ int main(int /* argc */, char* /* argv */ []) {
   testExceptionPtr1();
   testExceptionPtr2();
   baz();
-  return 0;
+  // no return because baz() is [[noreturn]]
 }

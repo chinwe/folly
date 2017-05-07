@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,12 +14,18 @@
  * limitations under the License.
  */
 
+#ifndef __STDC_FORMAT_MACROS
+#define __STDC_FORMAT_MACROS 1
+#endif
+
 #include <folly/String.h>
 
+#include <cinttypes>
+
 #include <boost/regex.hpp>
-#include <gtest/gtest.h>
 
 #include <folly/Array.h>
+#include <folly/portability/GTest.h>
 
 using namespace folly;
 using namespace std;
@@ -431,7 +437,7 @@ TEST(PrettyToDouble, Basic) {
         try{
           recoveredX = prettyToDouble(prettyPrint(x, formatType, addSpace),
                                              formatType);
-        } catch (std::range_error &ex){
+        } catch (std::range_error&) {
           EXPECT_TRUE(false);
         }
         double relativeError = (x - recoveredX) / x;
@@ -921,14 +927,27 @@ enum class Color {
   Blue,
 };
 
-void parseTo(folly::StringPiece in, Color& out) {
+enum class ColorErrorCode { INVALID_COLOR };
+
+struct ColorError : std::runtime_error {
+  using std::runtime_error::runtime_error;
+};
+
+ColorError makeConversionError(ColorErrorCode, StringPiece sp) {
+  return ColorError("Invalid my::Color representation : " + sp.str());
+}
+
+Expected<StringPiece, ColorErrorCode> parseTo(
+    StringPiece in,
+    Color& out) noexcept {
   if (in == "R") {
     out = Color::Red;
   } else if (in == "B") {
     out = Color::Blue;
   } else {
-    throw runtime_error("");
+    return makeUnexpected(ColorErrorCode::INVALID_COLOR);
   }
+  return StringPiece(in.end(), in.end());
 }
 }
 
@@ -938,6 +957,8 @@ TEST(Split, fixed_convert_custom) {
   EXPECT_TRUE(folly::split(',', "R,B", c1, c2));
   EXPECT_EQ(c1, my::Color::Red);
   EXPECT_EQ(c2, my::Color::Blue);
+
+  EXPECT_THROW(folly::split(',', "B,G", c1, c2), my::ColorError);
 }
 
 TEST(String, join) {
@@ -1082,11 +1103,12 @@ char* copyWithSameAlignment(char* dst, const char* src, size_t length) {
 void testToLowerAscii(Range<const char*> src) {
   // Allocate extra space so we can make copies that start at the
   // same alignment (byte, word, quadword, etc) as the source buffer.
-  char controlBuf[src.size() + 7];
-  char* control = copyWithSameAlignment(controlBuf, src.begin(), src.size());
+  auto controlBuf = std::vector<char>(src.size() + 7);
+  char* control =
+      copyWithSameAlignment(controlBuf.data(), src.begin(), src.size());
 
-  char testBuf[src.size() + 7];
-  char* test = copyWithSameAlignment(testBuf, src.begin(), src.size());
+  auto testBuf = std::vector<char>(src.size() + 7);
+  char* test = copyWithSameAlignment(testBuf.data(), src.begin(), src.size());
 
   for (size_t i = 0; i < src.size(); i++) {
     control[i] = tolower(control[i]);

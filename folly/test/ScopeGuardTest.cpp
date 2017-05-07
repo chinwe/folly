@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,13 +15,13 @@
  */
 
 #include <folly/ScopeGuard.h>
-#include <folly/Portability.h>
 
-#include <gtest/gtest.h>
 #include <glog/logging.h>
 
 #include <functional>
 #include <stdexcept>
+
+#include <folly/portability/GTest.h>
 
 using folly::ScopeGuard;
 using folly::makeGuard;
@@ -294,6 +294,7 @@ TEST(ScopeGuard, TEST_THROWING_CLEANUP_ACTION) {
   struct ThrowingCleanupAction {
     explicit ThrowingCleanupAction(int& scopeExitExecuted)
         : scopeExitExecuted_(scopeExitExecuted) {}
+    [[noreturn]]
     ThrowingCleanupAction(const ThrowingCleanupAction& other)
         : scopeExitExecuted_(other.scopeExitExecuted_) {
       throw std::runtime_error("whoa");

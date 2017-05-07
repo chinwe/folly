@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -198,7 +198,7 @@ void SpookyHashV2::Hash128(
     remainder = (length - ((const uint8_t *)end-(const uint8_t *)message));
     memcpy(buf, end, remainder);
     memset(((uint8_t *)buf)+remainder, 0, sc_blockSize-remainder);
-    ((uint8_t *)buf)[sc_blockSize-1] = remainder;
+    ((uint8_t*)buf)[sc_blockSize - 1] = uint8_t(remainder);
 
     // do some final mixing
     End(buf, h0,h1,h2,h3,h4,h5,h6,h7,h8,h9,h10,h11);

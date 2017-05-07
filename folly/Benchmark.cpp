@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,22 +35,34 @@ using namespace std;
 DEFINE_bool(benchmark, false, "Run benchmarks.");
 DEFINE_bool(json, false, "Output in JSON format.");
 
-DEFINE_string(bm_regex, "",
-              "Only benchmarks whose names match this regex will be run.");
+DEFINE_string(
+    bm_regex,
+    "",
+    "Only benchmarks whose names match this regex will be run.");
 
-DEFINE_int64(bm_min_usec, 100,
-             "Minimum # of microseconds we'll accept for each benchmark.");
+DEFINE_int64(
+    bm_min_usec,
+    100,
+    "Minimum # of microseconds we'll accept for each benchmark.");
 
-DEFINE_int64(bm_min_iters, 1,
-             "Minimum # of iterations we'll try for each benchmark.");
+DEFINE_int32(
+    bm_min_iters,
+    1,
+    "Minimum # of iterations we'll try for each benchmark.");
 
-DEFINE_int32(bm_max_secs, 1,
-             "Maximum # of seconds we'll spend on each benchmark.");
+DEFINE_int64(
+    bm_max_iters,
+    1 << 30,
+    "Maximum # of iterations we'll try for each benchmark.");
 
+DEFINE_int32(
+    bm_max_secs,
+    1,
+    "Maximum # of seconds we'll spend on each benchmark.");
 
 namespace folly {
 
-BenchmarkSuspender::NanosecondsSpent BenchmarkSuspender::nsSpent;
+std::chrono::high_resolution_clock::duration BenchmarkSuspender::timeSpent;
 
 typedef function<detail::TimeIterPair(unsigned int)> BenchmarkFun;
 
@@ -72,7 +84,7 @@ BENCHMARK(FB_FOLLY_GLOBAL_BENCHMARK_BASELINE) {
 #endif
 }
 
-int getGlobalBenchmarkBaselineIndex() {
+size_t getGlobalBenchmarkBaselineIndex() {
   const char *global = FB_STRINGIZE_X2(FB_FOLLY_GLOBAL_BENCHMARK_BASELINE);
   auto it = std::find_if(
     benchmarks().begin(),
@@ -82,7 +94,7 @@ int getGlobalBenchmarkBaselineIndex() {
     }
   );
   CHECK(it != benchmarks().end());
-  return it - benchmarks().begin();
+  return size_t(std::distance(benchmarks().begin(), it));
 }
 
 #undef FB_STRINGIZE_X2
@@ -94,75 +106,6 @@ void detail::addBenchmarkImpl(const char* file, const char* name,
 }
 
 /**
- * Given a point, gives density at that point as a number 0.0 < x <=
- * 1.0. The result is 1.0 if all samples are equal to where, and
- * decreases near 0 if all points are far away from it. The density is
- * computed with the help of a radial basis function.
- */
-static double density(const double * begin, const double *const end,
-                      const double where, const double bandwidth) {
-  assert(begin < end);
-  assert(bandwidth > 0.0);
-  double sum = 0.0;
-  FOR_EACH_RANGE (i, begin, end) {
-    auto d = (*i - where) / bandwidth;
-    sum += exp(- d * d);
-  }
-  return sum / (end - begin);
-}
-
-/**
- * Computes mean and variance for a bunch of data points. Note that
- * mean is currently not being used.
- */
-static pair<double, double>
-meanVariance(const double * begin, const double *const end) {
-  assert(begin < end);
-  double sum = 0.0, sum2 = 0.0;
-  FOR_EACH_RANGE (i, begin, end) {
-    sum += *i;
-    sum2 += *i * *i;
-  }
-  auto const n = end - begin;
-  return make_pair(sum / n, sqrt((sum2 - sum * sum / n) / n));
-}
-
-/**
- * Computes the mode of a sample set through brute force. Assumes
- * input is sorted.
- */
-static double mode(const double * begin, const double *const end) {
-  assert(begin < end);
-  // Lower bound and upper bound for result and their respective
-  // densities.
-  auto
-    result = 0.0,
-    bestDensity = 0.0;
-
-  // Get the variance so we pass it down to density()
-  auto const sigma = meanVariance(begin, end).second;
-  if (!sigma) {
-    // No variance means constant signal
-    return *begin;
-  }
-
-  FOR_EACH_RANGE (i, begin, end) {
-    assert(i == begin || *i >= i[-1]);
-    auto candidate = density(begin, end, *i, sigma * sqrt(2.0));
-    if (candidate > bestDensity) {
-      // Found a new best
-      bestDensity = candidate;
-      result = *i;
-    } else {
-      // Density is decreasing... we could break here if we definitely
-      // knew this is unimodal.
-    }
-  }
-
-  return result;
-}
-
-/**
  * Given a bunch of benchmark samples, estimate the actual run time.
  */
 static double estimateTime(double * begin, double * end) {
@@ -170,106 +113,57 @@ static double estimateTime(double * begin, double * end) {
 
   // Current state of the art: get the minimum. After some
   // experimentation, it seems taking the minimum is the best.
-
   return *min_element(begin, end);
-
-  // What follows after estimates the time as the mode of the
-  // distribution.
-
-  // Select the awesomest (i.e. most frequent) result. We do this by
-  // sorting and then computing the longest run length.
-  sort(begin, end);
-
-  // Eliminate outliers. A time much larger than the minimum time is
-  // considered an outlier.
-  while (end[-1] > 2.0 * *begin) {
-    --end;
-    if (begin == end) {
-      LOG(INFO) << *begin;
-    }
-    assert(begin < end);
-  }
-
-  double result = 0;
-
-  /* Code used just for comparison purposes */ {
-    unsigned bestFrequency = 0;
-    unsigned candidateFrequency = 1;
-    double candidateValue = *begin;
-    for (auto current = begin + 1; ; ++current) {
-      if (current == end || *current != candidateValue) {
-        // Done with the current run, see if it was best
-        if (candidateFrequency > bestFrequency) {
-          bestFrequency = candidateFrequency;
-          result = candidateValue;
-        }
-        if (current == end) {
-          break;
-        }
-        // Start a new run
-        candidateValue = *current;
-        candidateFrequency = 1;
-      } else {
-        // Cool, inside a run, increase the frequency
-        ++candidateFrequency;
-      }
-    }
-  }
-
-  result = mode(begin, end);
-
-  return result;
 }
 
 static double runBenchmarkGetNSPerIteration(const BenchmarkFun& fun,
                                             const double globalBaseline) {
+  using std::chrono::duration_cast;
+  using std::chrono::high_resolution_clock;
+  using std::chrono::microseconds;
+  using std::chrono::nanoseconds;
+  using std::chrono::seconds;
+
   // They key here is accuracy; too low numbers means the accuracy was
   // coarse. We up the ante until we get to at least minNanoseconds
   // timings.
-  static uint64_t resolutionInNs = 0;
-  if (!resolutionInNs) {
-    timespec ts;
-    CHECK_EQ(0, clock_getres(detail::DEFAULT_CLOCK_ID, &ts));
-    CHECK_EQ(0, ts.tv_sec) << "Clock sucks.";
-    CHECK_LT(0, ts.tv_nsec) << "Clock too fast for its own good.";
-    CHECK_EQ(1, ts.tv_nsec) << "Clock too coarse, upgrade your kernel.";
-    resolutionInNs = ts.tv_nsec;
-  }
+  static_assert(
+      std::is_same<high_resolution_clock::duration, nanoseconds>::value,
+      "High resolution clock must be nanosecond resolution.");
   // We choose a minimum minimum (sic) of 100,000 nanoseconds, but if
   // the clock resolution is worse than that, it will be larger. In
   // essence we're aiming at making the quantization noise 0.01%.
-  static const auto minNanoseconds =
-    max<uint64_t>(FLAGS_bm_min_usec * 1000UL,
-        min<uint64_t>(resolutionInNs * 100000, 1000000000ULL));
+  static const auto minNanoseconds = std::max<nanoseconds>(
+      nanoseconds(100000), microseconds(FLAGS_bm_min_usec));
 
   // We do measurements in several epochs and take the minimum, to
   // account for jitter.
   static const unsigned int epochs = 1000;
   // We establish a total time budget as we don't want a measurement
   // to take too long. This will curtail the number of actual epochs.
-  const uint64_t timeBudgetInNs = FLAGS_bm_max_secs * 1000000000ULL;
-  timespec global;
-  CHECK_EQ(0, clock_gettime(CLOCK_REALTIME, &global));
+  const auto timeBudget = seconds(FLAGS_bm_max_secs);
+  auto global = high_resolution_clock::now();
 
   double epochResults[epochs] = { 0 };
   size_t actualEpochs = 0;
 
   for (; actualEpochs < epochs; ++actualEpochs) {
-    for (unsigned int n = FLAGS_bm_min_iters; n < (1UL << 30); n *= 2) {
-      auto const nsecsAndIter = fun(n);
+    const auto maxIters = uint32_t(FLAGS_bm_max_iters);
+    for (auto n = uint32_t(FLAGS_bm_min_iters); n < maxIters; n *= 2) {
+      auto const nsecsAndIter = fun(static_cast<unsigned int>(n));
       if (nsecsAndIter.first < minNanoseconds) {
         continue;
       }
       // We got an accurate enough timing, done. But only save if
       // smaller than the current result.
-      epochResults[actualEpochs] = max(0.0, double(nsecsAndIter.first) /
-                                       nsecsAndIter.second - globalBaseline);
+      auto nsecs = duration_cast<nanoseconds>(nsecsAndIter.first).count();
+      epochResults[actualEpochs] =
+          max(0.0, double(nsecs) / nsecsAndIter.second - globalBaseline);
       // Done with the current epoch, we got a meaningful timing.
       break;
     }
-    timespec now;
-    CHECK_EQ(0, clock_gettime(CLOCK_REALTIME, &now));
-    if (detail::timespecDiff(now, global) >= timeBudgetInNs) {
+    auto now = high_resolution_clock::now();
+    if (now - global >= timeBudget) {
       // No more time budget available.
       ++actualEpochs;
       break;
@@ -452,7 +346,7 @@ void runBenchmarks() {
 
   // PLEASE KEEP QUIET. MEASUREMENTS IN PROGRESS.
 
-  unsigned int baselineIndex = getGlobalBenchmarkBaselineIndex();
+  size_t baselineIndex = getGlobalBenchmarkBaselineIndex();
 
   auto const globalBaseline =
       runBenchmarkGetNSPerIteration(get<2>(benchmarks()[baselineIndex]), 0);

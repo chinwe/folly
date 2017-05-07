@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <tuple>
 #include <type_traits>
@@ -358,6 +359,14 @@ struct Hash {
   template <class T, class... Ts>
   size_t operator()(const T& t, const Ts&... ts) const {
     return hash::hash_128_to_64((*this)(t), (*this)(ts...));
+  }
+};
+
+template <>
+struct hasher<bool> {
+  size_t operator()(bool key) const {
+    // Make sure that all the output bits depend on the input.
+    return key ? std::numeric_limits<size_t>::max() : 0;
   }
 };
 

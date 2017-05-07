@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@ void MicroLockCore::lockSlowPath(uint32_t oldWord,
                                  uint32_t slotHeldBit,
                                  unsigned maxSpins,
                                  unsigned maxYields) {
-  unsigned newWord;
+  uint32_t newWord;
   unsigned spins = 0;
   uint32_t slotWaitBit = slotHeldBit << 1;
 

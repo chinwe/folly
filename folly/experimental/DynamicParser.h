@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -357,9 +357,9 @@ private:
     folly::dynamic releaseErrors();
 
     // Invoked on error when using OnError::THROW.
-    void throwErrors();
+    [[noreturn]] void throwErrors();
 
-  private:
+   private:
     friend struct Pop;
 
     folly::dynamic releaseErrorsImpl();  // for releaseErrors() & throwErrors()

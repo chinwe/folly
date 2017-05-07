@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements. See the NOTICE file
@@ -22,7 +22,9 @@
 
 #include <map>
 #include <memory>
-#include <folly/RWSpinLock.h>
+
+#include <folly/SharedMutex.h>
+#include <folly/Synchronized.h>
 
 namespace folly {
 
@@ -32,6 +34,10 @@ namespace folly {
 class RequestData {
  public:
   virtual ~RequestData() = default;
+  // Avoid calling RequestContext::setContextData, setContextDataIfAbsent, or
+  // clearContextData from these callbacks. Doing so will cause deadlock. We
+  // could fix these deadlocks, but only at significant performance penalty, so
+  // just don't do it!
   virtual void onSet() {}
   virtual void onUnset() {}
 };
@@ -51,14 +57,7 @@ class RequestContext {
   }
 
   // Get the current context.
-  static RequestContext* get() {
-    auto context = getStaticContext();
-    if (!context) {
-      static RequestContext defaultContext;
-      return std::addressof(defaultContext);
-    }
-    return context.get();
-  }
+  static RequestContext* get();
 
   // The following API may be used to set per-request data in a thread-safe way.
   // This access is still performance sensitive, so please ask if you need help
@@ -103,8 +102,8 @@ class RequestContext {
  private:
   static std::shared_ptr<RequestContext>& getStaticContext();
 
-  mutable folly::RWSpinLock lock;
-  std::map<std::string, std::unique_ptr<RequestData>> data_;
+  using Data = std::map<std::string, std::unique_ptr<RequestData>>;
+  folly::Synchronized<Data, folly::SharedMutex> data_;
 };
 
 class RequestContextScopeGuard {
@@ -112,6 +111,11 @@ class RequestContextScopeGuard {
   std::shared_ptr<RequestContext> prev_;
 
  public:
+  RequestContextScopeGuard(const RequestContextScopeGuard&) = delete;
+  RequestContextScopeGuard& operator=(const RequestContextScopeGuard&) = delete;
+  RequestContextScopeGuard(RequestContextScopeGuard&&) = delete;
+  RequestContextScopeGuard& operator=(RequestContextScopeGuard&&) = delete;
+
   // Create a new RequestContext and reset to the original value when
   // this goes out of scope.
   RequestContextScopeGuard() : prev_(RequestContext::saveContext()) {
@@ -121,7 +125,8 @@ class RequestContextScopeGuard {
   // Set a RequestContext that was previously captured by saveContext(). It will
   // be automatically reset to the original value when this goes out of scope.
   explicit RequestContextScopeGuard(std::shared_ptr<RequestContext> ctx)
-      : prev_(RequestContext::setContext(std::move(ctx))) {}
+      : prev_(RequestContext::setContext(std::move(ctx))) {
+  }
 
   ~RequestContextScopeGuard() {
     RequestContext::setContext(std::move(prev_));

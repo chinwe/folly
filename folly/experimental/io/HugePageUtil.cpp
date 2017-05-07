@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,25 +14,14 @@
  * limitations under the License.
  */
 
-#include <sys/mman.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <errno.h>
-#include <fcntl.h>
-
 #include <iostream>
 #include <stdexcept>
-#include <system_error>
 
-#include <folly/File.h>
 #include <folly/Format.h>
 #include <folly/MemoryMapping.h>
-#include <folly/Portability.h>
 #include <folly/Range.h>
-#include <folly/ScopeGuard.h>
 #include <folly/experimental/io/HugePages.h>
 #include <folly/portability/GFlags.h>
-#include <folly/portability/Unistd.h>
 
 DEFINE_bool(cp, false, "Copy file");
 

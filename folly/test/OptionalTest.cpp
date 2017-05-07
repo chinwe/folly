@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,17 +15,16 @@
  */
 
 #include <folly/Optional.h>
-#include <folly/Portability.h>
+#include <folly/portability/GTest.h>
 
-#include <memory>
-#include <vector>
 #include <algorithm>
 #include <iomanip>
+#include <memory>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
+#include <vector>
 
-#include <glog/logging.h>
-#include <gtest/gtest.h>
 #include <boost/optional.hpp>
 
 using std::unique_ptr;
@@ -174,23 +173,9 @@ struct ExpectingDeleter {
   }
 };
 
-TEST(Optional, value_life_extention) {
-  // Extends the life of the value.
-  const auto& ptr = Optional<std::unique_ptr<int, ExpectingDeleter>>(
-      {new int(42), ExpectingDeleter{1337}}).value();
-  *ptr = 1337;
-}
-
 TEST(Optional, value_move) {
   auto ptr = Optional<std::unique_ptr<int, ExpectingDeleter>>(
       {new int(42), ExpectingDeleter{1337}}).value();
-  *ptr = 1337;
-}
-
-TEST(Optional, dereference_life_extention) {
-  // Extends the life of the value.
-  const auto& ptr = *Optional<std::unique_ptr<int, ExpectingDeleter>>(
-      {new int(42), ExpectingDeleter{1337}});
   *ptr = 1337;
 }
 
@@ -474,7 +459,7 @@ TEST(Optional, MakeOptional) {
   EXPECT_EQ(**optIntPtr, 3);
 }
 
-#if __CLANG_PREREQ(3, 6)
+#if __clang__
 # pragma clang diagnostic push
 # pragma clang diagnostic ignored "-Wself-move"
 #endif
@@ -489,7 +474,7 @@ TEST(Optional, SelfAssignment) {
   ASSERT_TRUE(b.hasValue() && b.value() == 23333333);
 }
 
-#if __CLANG_PREREQ(3, 6)
+#if __clang__
 # pragma clang diagnostic pop
 #endif
 
@@ -558,5 +543,13 @@ TEST(Optional, TriviallyDestructible) {
   EXPECT_TRUE(std::is_trivially_destructible<Optional<NoDestructor>>::value);
   EXPECT_TRUE(std::is_trivially_destructible<Optional<int>>::value);
   EXPECT_FALSE(std::is_trivially_destructible<Optional<WithDestructor>>::value);
+}
+
+TEST(Optional, Hash) {
+  // Test it's usable in std::unordered map (compile time check)
+  std::unordered_map<Optional<int>, Optional<int>> obj;
+  // Also check the std::hash template can be instantiated by the compiler
+  std::hash<Optional<int>>()(none);
+  std::hash<Optional<int>>()(3);
 }
 }

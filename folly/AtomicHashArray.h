@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,8 +16,8 @@
 
 /**
  *  AtomicHashArray is the building block for AtomicHashMap.  It provides the
- *  core lock-free functionality, but is limitted by the fact that it cannot
- *  grow past it's initialization size and is a little more awkward (no public
+ *  core lock-free functionality, but is limited by the fact that it cannot
+ *  grow past its initialization size and is a little more awkward (no public
  *  constructor, for example).  If you're confident that you won't run out of
  *  space, don't mind the awkardness, and really need bare-metal performance,
  *  feel free to use AHA directly.
@@ -176,12 +176,12 @@ class AtomicHashArray : boost::noncopyable {
    *   deleter to make sure everything is cleaned up properly.
    */
   struct Config {
-    KeyT   emptyKey;
-    KeyT   lockedKey;
-    KeyT   erasedKey;
+    KeyT emptyKey;
+    KeyT lockedKey;
+    KeyT erasedKey;
     double maxLoadFactor;
     double growthFactor;
-    int    entryCountThreadCacheSize;
+    uint32_t entryCountThreadCacheSize;
     size_t capacity; // if positive, overrides maxLoadFactor
 
   public:
@@ -329,7 +329,7 @@ class AtomicHashArray : boost::noncopyable {
     numPendingEntries_.setCacheSize(newSize);
   }
 
-  int getEntryCountThreadCacheSize() const {
+  uint32_t getEntryCountThreadCacheSize() const {
     return numEntries_.getCacheSize();
   }
 
@@ -401,8 +401,13 @@ friend class AtomicHashMap<KeyT,
 
   // Force constructor/destructor private since create/destroy should be
   // used externally instead
-  AtomicHashArray(size_t capacity, KeyT emptyKey, KeyT lockedKey,
-                  KeyT erasedKey, double maxLoadFactor, size_t cacheSize);
+  AtomicHashArray(
+      size_t capacity,
+      KeyT emptyKey,
+      KeyT lockedKey,
+      KeyT erasedKey,
+      double maxLoadFactor,
+      uint32_t cacheSize);
 
   ~AtomicHashArray() = default;
 

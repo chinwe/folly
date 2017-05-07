@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,8 @@
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
+
+#include <folly/detail/CacheLocality.h>
 
 namespace folly {
 
@@ -166,11 +168,14 @@ struct ProducerConsumerQueue {
   }
 
 private:
+  char pad0_[detail::CacheLocality::kFalseSharingRange];
   const uint32_t size_;
   T* const records_;
 
-  std::atomic<unsigned int> readIndex_;
-  std::atomic<unsigned int> writeIndex_;
+  FOLLY_ALIGN_TO_AVOID_FALSE_SHARING std::atomic<unsigned int> readIndex_;
+  FOLLY_ALIGN_TO_AVOID_FALSE_SHARING std::atomic<unsigned int> writeIndex_;
+
+  char pad1_[detail::CacheLocality::kFalseSharingRange - sizeof(writeIndex_)];
 };
 
 }

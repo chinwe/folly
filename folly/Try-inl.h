@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/detail/TryDetail.h>
 #include <stdexcept>
 
 namespace folly {
@@ -121,7 +122,7 @@ template <class T>
 void Try<T>::throwIfFailed() const {
   if (contains_ != Contains::VALUE) {
     if (contains_ == Contains::EXCEPTION) {
-      e_->throwException();
+      e_->throw_exception();
     } else {
       throw UsingUninitializedTry();
     }
@@ -130,7 +131,7 @@ void Try<T>::throwIfFailed() const {
 
 void Try<void>::throwIfFailed() const {
   if (!hasValue_) {
-    e_->throwException();
+    e_->throw_exception();
   }
 }
 
@@ -171,6 +172,12 @@ makeTryWith(F&& f) {
   } catch (...) {
     return Try<void>(exception_wrapper(std::current_exception()));
   }
+}
+
+template <typename... Ts>
+std::tuple<Ts...> unwrapTryTuple(std::tuple<folly::Try<Ts>...>&& ts) {
+  return detail::TryTuple<Ts...>::unwrap(
+      std::forward<std::tuple<folly::Try<Ts>...>>(ts));
 }
 
 } // folly

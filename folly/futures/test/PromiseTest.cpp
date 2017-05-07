@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,9 +14,8 @@
  * limitations under the License.
  */
 
-#include <gtest/gtest.h>
-
 #include <folly/futures/Future.h>
+#include <folly/portability/GTest.h>
 
 using namespace folly;
 using std::unique_ptr;
@@ -93,6 +92,8 @@ TEST(Promise, setException) {
     auto f = p.getFuture();
     try {
       throw eggs;
+    } catch (const std::exception& e) {
+      p.setException(exception_wrapper(std::current_exception(), e));
     } catch (...) {
       p.setException(exception_wrapper(std::current_exception()));
     }

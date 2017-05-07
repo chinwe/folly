@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -118,7 +118,7 @@ namespace folly {
     struct ScheduledFunc {
       TimePoint time;
       size_t ordinal;
-      Func func;
+      Func mutable func;
 
       ScheduledFunc(TimePoint const& t, Func&& f)
         : time(t), func(std::move(f))
@@ -128,13 +128,19 @@ namespace folly {
       }
 
       bool operator<(ScheduledFunc const& b) const {
+        // Earlier-scheduled things must be *higher* priority
+        // in the max-based std::priority_queue
         if (time == b.time)
-          return ordinal < b.ordinal;
-        return time < b.time;
+          return ordinal > b.ordinal;
+        return time > b.time;
+      }
+
+      Func&& moveOutFunc() const {
+        return std::move(func);
       }
     };
     std::priority_queue<ScheduledFunc> scheduledFuncs_;
-    TimePoint now_ = now_.min();
+    TimePoint now_ = TimePoint::min();
   };
 
 }

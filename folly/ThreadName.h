@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,57 +16,33 @@
 
 #pragma once
 
+#include <string>
 #include <thread>
-#include <pthread.h>
+
+#include <folly/Optional.h>
 #include <folly/Range.h>
+#include <folly/portability/Config.h>
+#include <folly/portability/PThread.h>
 
 namespace folly {
+/**
+ * This returns true if the current platform supports setting the name of the
+ * current thread.
+ */
+bool canSetCurrentThreadName();
+/**
+ * This returns true if the current platform supports setting the name of
+ * threads other than the one currently executing.
+ */
+bool canSetOtherThreadName();
+/**
+ * Get the name of the current string, or nothing if an error occurs.
+ */
+Optional<std::string> getCurrentThreadName();
 
-// This looks a bit weird, but it's necessary to avoid
-// having an undefined compiler function called.
-#if defined(__GLIBC__) && !defined(__APPLE__) && !defined(__ANDROID__)
-#if __GLIBC_PREREQ(2, 12)
-// has pthread_setname_np(pthread_t, const char*) (2 params)
-#define FOLLY_HAS_PTHREAD_SETNAME_NP_THREAD_NAME 1
+bool setThreadName(std::thread::id tid, StringPiece name);
+#if FOLLY_HAVE_PTHREAD
+bool setThreadName(pthread_t pid, StringPiece name);
 #endif
-#endif
-#if defined(__APPLE__) && defined(__MAC_OS_X_VERSION_MIN_REQUIRED)
-#if __MAC_OS_X_VERSION_MIN_REQUIRED >= 1060
-// has pthread_setname_np(const char*) (1 param)
-#define FOLLY_HAS_PTHREAD_SETNAME_NP_NAME 1
-#endif
-#endif
-
-template <typename T>
-inline bool setThreadName(T /* id */, StringPiece /* name */) {
-  static_assert(
-      std::is_same<T, pthread_t>::value ||
-      std::is_same<T, std::thread::native_handle_type>::value,
-      "type must be pthread_t or std::thread::native_handle_type");
-  return false;
-}
-
-#ifdef FOLLY_HAS_PTHREAD_SETNAME_NP_THREAD_NAME
-template <>
-inline bool setThreadName(pthread_t id, StringPiece name) {
-  return 0 == pthread_setname_np(id, name.fbstr().substr(0, 15).c_str());
-}
-#endif
-
-#ifdef FOLLY_HAS_PTHREAD_SETNAME_NP_NAME
-template <>
-inline bool setThreadName(pthread_t id, StringPiece name) {
-  // Since OS X 10.6 it is possible for a thread to set its own name,
-  // but not that of some other thread.
-  if (pthread_equal(pthread_self(), id)) {
-    return 0 == pthread_setname_np(name.fbstr().c_str());
-  }
-  return false;
-}
-#endif
-
-inline bool setThreadName(StringPiece name) {
-  return setThreadName(pthread_self(), name);
-}
-
+bool setThreadName(StringPiece name);
 }

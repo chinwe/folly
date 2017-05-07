@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017-present Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,12 +14,15 @@
  * limitations under the License.
  */
 
-
 #include <folly/experimental/symbolizer/Dwarf.h>
 
 #include <type_traits>
 
+#if FOLLY_HAVE_LIBDWARF_DWARF_H
+#include <libdwarf/dwarf.h>
+#else
 #include <dwarf.h>
+#endif
 
 namespace folly {
 namespace symbolizer {
@@ -300,7 +303,11 @@ bool Dwarf::getSection(const char* name, folly::StringPiece* section) const {
   if (!elfSection) {
     return false;
   }
-
+#ifdef SHF_COMPRESSED
+  if (elfSection->sh_flags & SHF_COMPRESSED) {
+    return false;
+  }
+#endif
   *section = elf_->getSectionBody(*elfSection);
   return true;
 }
@@ -314,7 +321,6 @@ void Dwarf::init() {
     elf_ = nullptr;
     return;
   }
-  getSection(".debug_str", &strings_);
 
   // Optional: fast address range lookup. If missing .debug_info can
   // be used - but it's much slower (linear scan).
@@ -453,7 +459,7 @@ bool Dwarf::findDebugInfoOffset(uintptr_t address,
       auto start = read<uintptr_t>(chunk);
       auto length = read<uintptr_t>(chunk);
 
-      if (start == 0) {
+      if (start == 0 && length == 0) {
         break;
       }
 
@@ -562,10 +568,16 @@ bool Dwarf::findLocation(uintptr_t address,
   return locationInfo.hasFileAndLine;
 }
 
-bool Dwarf::findAddress(uintptr_t address, LocationInfo& locationInfo) const {
+bool Dwarf::findAddress(uintptr_t address,
+                        LocationInfo& locationInfo,
+                        LocationInfoMode mode) const {
   locationInfo = LocationInfo();
 
-  if (!elf_) { // no file
+  if (mode == LocationInfoMode::DISABLED) {
+    return false;
+  }
+
+  if (!elf_) { // No file.
     return false;
   }
 
@@ -573,19 +585,24 @@ bool Dwarf::findAddress(uintptr_t address, LocationInfo& locationInfo) const {
     // Fast path: find the right .debug_info entry by looking up the
     // address in .debug_aranges.
     uint64_t offset = 0;
-    if (!findDebugInfoOffset(address, aranges_, offset)) {
-      // NOTE: clang doesn't generate entries in .debug_aranges for
-      // some functions, but always generates .debug_info entries.
-      // We could read them from .debug_info but that's too slow.
-      // If .debug_aranges is present fast address lookup is assumed.
+    if (findDebugInfoOffset(address, aranges_, offset)) {
+      // Read compilation unit header from .debug_info
+      folly::StringPiece infoEntry(info_);
+      infoEntry.advance(offset);
+      findLocation(address, infoEntry, locationInfo);
+      return locationInfo.hasFileAndLine;
+    } else if (mode == LocationInfoMode::FAST) {
+      // NOTE: Clang (when using -gdwarf-aranges) doesn't generate entries
+      // in .debug_aranges for some functions, but always generates
+      // .debug_info entries.  Scanning .debug_info is slow, so fall back to
+      // it only if such behavior is requested via LocationInfoMode.
       return false;
+    } else {
+      DCHECK(mode == LocationInfoMode::FULL);
+      // Fall back to the linear scan.
     }
-    // Read compilation unit header from .debug_info
-    folly::StringPiece infoEntry(info_);
-    infoEntry.advance(offset);
-    findLocation(address, infoEntry, locationInfo);
-    return true;
   }
+
 
   // Slow path (linear scan): Iterate over all .debug_info entries
   // and look for the address in each compilation unit.

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,10 +34,16 @@ namespace folly {
 /// possible to construct a value of this type, but it is always the same value
 /// every time, so it is uninteresting.
 struct Unit {
+  // These are structs rather than type aliases because MSVC 2017 RC has
+  // trouble correctly resolving dependent expressions in type aliases
+  // in certain very specific contexts, including a couple where this is
+  // used. See the known issues section here for more info:
+  // https://blogs.msdn.microsoft.com/vcblog/2016/06/07/expression-sfinae-improvements-in-vs-2015-update-3/
+
   template <typename T>
-  using Lift = std::conditional<std::is_same<T, void>::value, Unit, T>;
+  struct Lift : std::conditional<std::is_same<T, void>::value, Unit, T> {};
   template <typename T>
-  using Drop = std::conditional<std::is_same<T, Unit>::value, void, T>;
+  struct Drop : std::conditional<std::is_same<T, Unit>::value, void, T> {};
 
   bool operator==(const Unit& /*other*/) const { return true; }
   bool operator!=(const Unit& /*other*/) const { return false; }

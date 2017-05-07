@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -127,7 +127,7 @@ void setup_rand_bench() {
         });
     addBenchmark(
         __FILE__,
-        sformat("\%bool_array_set_rand_bench({}, {})",
+        sformat("%bool_array_set_rand_bench({}, {})",
                 size_add, size_contains).c_str(),
         [=](int iters) {
           rand_bench<BoolArraySet>(iters, size_add, size_contains);
@@ -135,7 +135,7 @@ void setup_rand_bench() {
         });
     addBenchmark(
         __FILE__,
-        sformat("\%sparse_byte_set_rand_bench({}, {})",
+        sformat("%sparse_byte_set_rand_bench({}, {})",
                 size_add, size_contains).c_str(),
         [=](int iters) {
           rand_bench<SparseByteSet>(iters, size_add, size_contains);
@@ -151,7 +151,7 @@ void setup_rand_bench() {
 }
 
 int main(int argc, char** argv) {
-  google::ParseCommandLineFlags(&argc, &argv, true);
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
   setup_rand_bench();
   runBenchmarks();
   return 0;

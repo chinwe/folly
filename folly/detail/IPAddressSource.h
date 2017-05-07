@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -51,7 +51,7 @@ struct Bytes {
     std::size_t asize = a.size();
     std::array<uint8_t, N> ba{{0}};
     for (std::size_t i = 0; i < asize; i++) {
-      ba[i] = a[i] & b[i];
+      ba[i] = uint8_t(a[i] & b[i]);
     }
     return ba;
   }
@@ -92,17 +92,21 @@ struct Bytes {
       ba[byteIndex] = one[byteIndex];
       ++byteIndex;
     }
-    auto bitIndex = std::min(mask, (uint8_t)(byteIndex * 8));
+    auto bitIndex = std::min(mask, uint8_t(byteIndex * 8));
+    uint8_t bI = uint8_t(bitIndex / 8);
+    uint8_t bM = uint8_t(bitIndex % 8);
     // Compute the bit up to which the two byte arrays match in the
     // unmatched byte.
     // Here the check is bitIndex < mask since the 0th mask entry in
     // kMasks array holds the mask for masking the MSb in this byte.
     // We could instead make it hold so that no 0th entry masks no
     // bits but thats a useless iteration.
-    while (bitIndex < mask && ((one[bitIndex / 8] & kMasks[bitIndex % 8]) ==
-                               (two[bitIndex / 8] & kMasks[bitIndex % 8]))) {
-      ba[bitIndex / 8] = one[bitIndex / 8] & kMasks[bitIndex % 8];
+    while (bitIndex < mask &&
+           ((one[bI] & kMasks[bM]) == (two[bI] & kMasks[bM]))) {
+      ba[bI] = uint8_t(one[bI] & kMasks[bM]);
       ++bitIndex;
+      bI = uint8_t(bitIndex / 8);
+      bM = uint8_t(bitIndex % 8);
     }
     return {ba, bitIndex};
   }
@@ -174,7 +178,7 @@ struct Bytes {
 template <
     class IntegralType,
     IntegralType DigitCount,
-    IntegralType Base = 10,
+    IntegralType Base = IntegralType(10),
     bool PrintAllDigits = false,
     class = typename std::enable_if<
         std::is_integral<IntegralType>::value &&
@@ -190,20 +194,20 @@ inline void writeIntegerString(IntegralType val, char** buffer) {
   }
 
   IntegralType powerToPrint = 1;
-  for (int i = 1; i < DigitCount; ++i) {
+  for (IntegralType i = 1; i < DigitCount; ++i) {
     powerToPrint *= Base;
   }
 
   bool found = PrintAllDigits;
   while (powerToPrint) {
     if (found || powerToPrint <= val) {
-      IntegralType value = val / powerToPrint;
+      IntegralType value = IntegralType(val / powerToPrint);
       if (Base == 10 || value < 10) {
         value += '0';
       } else {
         value += ('a' - 10);
       }
-      *(buf++) = value;
+      *(buf++) = char(value);
       val %= powerToPrint;
       found = true;
     }
@@ -227,7 +231,7 @@ inline std::string fastIpv4ToString(const in_addr& inAddr) {
   *(buf++) = '.';
   writeIntegerString<uint8_t, 3>(octets[3], &buf);
 
-  return std::string(str, buf - str);
+  return std::string(str, size_t(buf - str));
 }
 
 inline std::string fastIpv6ToString(const in6_addr& in6Addr) {
@@ -251,7 +255,7 @@ inline std::string fastIpv6ToString(const in6_addr& in6Addr) {
     }
   }
 
-  return std::string(str, buf - str);
+  return std::string(str, size_t(buf - str));
 }
 }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,8 @@
 
 #include <folly/Foreach.h>
 
-#include <gtest/gtest.h>
+#include <folly/portability/GTest.h>
+
 #include <map>
 #include <string>
 #include <vector>
@@ -37,6 +38,18 @@ TEST(Foreach, ForEachRvalue) {
     EXPECT_EQ(hello[n], *it);
   }
   EXPECT_EQ(0, n);
+}
+
+TEST(Foreach, ForEachNested) {
+  const std::string hello = "hello";
+  size_t n = 0;
+  FOR_EACH(i, hello) {
+    FOR_EACH(j, hello) {
+      ++n;
+    }
+  }
+  auto len = hello.size();
+  EXPECT_EQ(len * len, n);
 }
 
 TEST(Foreach, ForEachKV) {

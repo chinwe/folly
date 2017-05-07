@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 #include <exception>
 #include <stdarg.h>
 #include <string>
+#include <vector>
 #include <boost/type_traits.hpp>
 #include <boost/regex/pending/unicode_iterator.hpp>
 
@@ -491,7 +492,8 @@ struct IsConvertible {
 template <class T>
 struct IsConvertible<
     T,
-    decltype(parseTo(std::declval<folly::StringPiece>(), std::declval<T&>()))> {
+    decltype(static_cast<void>(
+        parseTo(std::declval<folly::StringPiece>(), std::declval<T&>())))> {
   enum { value = true };
 };
 
@@ -643,13 +645,5 @@ class UTF8Range : public Base {
 using UTF8StringPiece = UTF8Range<const char*>;
 
 } // namespace folly
-
-// Hook into boost's type traits
-namespace boost {
-template <class T>
-struct has_nothrow_constructor<folly::basic_fbstring<T> > : true_type {
-  enum { value = true };
-};
-} // namespace boost
 
 #include <folly/String-inl.h>

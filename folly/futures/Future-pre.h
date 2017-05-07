@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -71,11 +71,11 @@ struct callableWith {
     template<typename T,
              typename = detail::resultOf<T, Args...>>
     static constexpr std::true_type
-    check(std::nullptr_t) { return std::true_type{}; };
+    check(std::nullptr_t) { return std::true_type{}; }
 
     template<typename>
     static constexpr std::false_type
-    check(...) { return std::false_type{}; };
+    check(...) { return std::false_type{}; }
 
     typedef decltype(check<F>(nullptr)) type;
     static constexpr bool value = type::value;

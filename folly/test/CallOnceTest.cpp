@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,9 +20,9 @@
 
 #include <folly/CallOnce.h>
 #include <folly/portability/GFlags.h>
+#include <folly/portability/GTest.h>
 
 #include <glog/logging.h>
-#include <gtest/gtest.h>
 
 DEFINE_int32(threads, 16, "benchmark concurrency");
 
@@ -48,6 +48,23 @@ TEST(FollyCallOnce, Simple) {
   folly::call_once(flag, fn, &out);
   folly::call_once(flag, fn, &out);
   ASSERT_EQ(1, out);
+}
+
+TEST(FollyCallOnce, Exception) {
+  struct ExpectedException {};
+  folly::once_flag flag;
+  size_t numCalls = 0;
+  EXPECT_THROW(
+      folly::call_once(
+          flag,
+          [&] {
+            ++numCalls;
+            throw ExpectedException();
+          }),
+      ExpectedException);
+  EXPECT_EQ(1, numCalls);
+  folly::call_once(flag, [&] { ++numCalls; });
+  EXPECT_EQ(2, numCalls);
 }
 
 TEST(FollyCallOnce, Stress) {

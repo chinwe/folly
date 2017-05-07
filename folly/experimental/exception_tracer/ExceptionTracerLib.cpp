@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 
 #include <vector>
 
+#include <folly/Indestructible.h>
 #include <folly/Portability.h>
 #include <folly/SharedMutex.h>
 #include <folly/Synchronized.h>
@@ -33,7 +34,6 @@ void __cxa_throw(
     void (*destructor)(void*)) __attribute__((__noreturn__));
 void* __cxa_begin_catch(void* excObj) throw();
 void __cxa_rethrow(void) __attribute__((__noreturn__));
-void __cxa_rethrow(void);
 void __cxa_end_catch(void);
 }
 
@@ -69,13 +69,13 @@ class CallbackHolder {
 namespace folly {
 namespace exception_tracer {
 
-#define DECLARE_CALLBACK(NAME)                         \
-  CallbackHolder<NAME##Type>& get##NAME##Callbacks() { \
-    static CallbackHolder<NAME##Type> Callbacks;       \
-    return Callbacks;                                  \
-  }                                                    \
-  void register##NAME##Callback(NAME##Type callback) { \
-    get##NAME##Callbacks().registerCallback(callback); \
+#define DECLARE_CALLBACK(NAME)                                   \
+  CallbackHolder<NAME##Type>& get##NAME##Callbacks() {           \
+    static Indestructible<CallbackHolder<NAME##Type>> Callbacks; \
+    return *Callbacks;                                           \
+  }                                                              \
+  void register##NAME##Callback(NAME##Type callback) {           \
+    get##NAME##Callbacks().registerCallback(callback);           \
   }
 
 DECLARE_CALLBACK(CxaThrow);
@@ -86,6 +86,15 @@ DECLARE_CALLBACK(RethrowException);
 
 } // exception_tracer
 } // folly
+
+// Clang is smart enough to understand that the symbols we're loading
+// are [[noreturn]], but GCC is not. In order to be able to build with
+// -Wunreachable-code enable for Clang, these __builtin_unreachable()
+// calls need to go away. Everything else is messy though, so just
+// #define it to an empty macro under Clang and be done with it.
+#ifdef __clang__
+# define __builtin_unreachable()
+#endif
 
 namespace __cxxabiv1 {
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -78,6 +78,13 @@ class IPAddressV4 {
   ByteRange toBinary() const {
     return ByteRange((const unsigned char *) &addr_.inAddr_.s_addr, 4);
   }
+
+  /**
+   * Create a new IPAddress instance from the in-addr.arpa representation.
+   * @throws IPAddressFormatException if the input is not a valid in-addr.arpa
+   * representation
+   */
+  static IPAddressV4 fromInverseArpaName(const std::string& arpaname);
 
   /**
    * Convert a IPv4 address string to a long in network byte order.
@@ -183,6 +190,8 @@ class IPAddressV4 {
   // @see IPAddress#str
   std::string str() const;
 
+  std::string toInverseArpaName() const;
+
   // return underlying in_addr structure
   in_addr toAddr() const { return addr_.inAddr_; }
 
@@ -204,7 +213,7 @@ class IPAddressV4 {
   std::string toFullyQualified() const { return str(); }
 
   // @see IPAddress#version
-  size_t version() const { return 4; }
+  uint8_t version() const { return 4; }
 
   /**
    * Return the mask associated with the given number of bits.

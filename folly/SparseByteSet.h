@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -62,7 +62,7 @@ class SparseByteSet {
     if (r) {
       DCHECK_LT(size_, kCapacity);
       dense_[size_] = i;
-      sparse_[i] = size_;
+      sparse_[i] = uint8_t(size_);
       size_++;
     }
     return r;

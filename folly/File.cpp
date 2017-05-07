@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,14 +31,9 @@
 
 namespace folly {
 
-File::File()
-  : fd_(-1)
-  , ownsFd_(false)
-{}
+File::File() noexcept : fd_(-1), ownsFd_(false) {}
 
-File::File(int fd, bool ownsFd)
-  : fd_(fd)
-  , ownsFd_(ownsFd) {
+File::File(int fd, bool ownsFd) noexcept : fd_(fd), ownsFd_(ownsFd) {
   CHECK_GE(fd, -1) << "fd must be -1 or non-negative";
   CHECK(fd != -1 || !ownsFd) << "cannot own -1";
 }

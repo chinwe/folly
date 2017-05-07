@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@
 
 #include <folly/Range.h>
 
+#include <folly/portability/GTest.h>
 #include <folly/portability/Memory.h>
 #include <folly/portability/SysMman.h>
 
@@ -31,7 +32,6 @@
 #include <vector>
 #include <boost/range/concepts.hpp>
 #include <boost/algorithm/string/trim.hpp>
-#include <gtest/gtest.h>
 
 using namespace folly;
 using namespace folly::detail;
@@ -293,9 +293,9 @@ TEST(StringPiece, InvalidRange) {
   EXPECT_THROW(a.subpiece(6), std::out_of_range);
 }
 
-constexpr char helloArray[] = "hello";
-
 TEST(StringPiece, Constexpr) {
+  constexpr const char* helloArray = "hello";
+
   constexpr StringPiece hello1("hello");
   EXPECT_EQ("hello", hello1);
   static_assert(hello1.size() == 5, "hello size should be 5 at compile time");
@@ -314,6 +314,15 @@ TEST(StringPiece, Prefix) {
   EXPECT_FALSE(a.startsWith("hellox"));
   EXPECT_FALSE(a.startsWith('x'));
   EXPECT_FALSE(a.startsWith("x"));
+
+  EXPECT_TRUE(a.startsWith("", folly::AsciiCaseInsensitive()));
+  EXPECT_TRUE(a.startsWith("hello", folly::AsciiCaseInsensitive()));
+  EXPECT_TRUE(a.startsWith("hellO", folly::AsciiCaseInsensitive()));
+  EXPECT_TRUE(a.startsWith("HELL", folly::AsciiCaseInsensitive()));
+  EXPECT_TRUE(a.startsWith("H", folly::AsciiCaseInsensitive()));
+  EXPECT_FALSE(a.startsWith("HELLOX", folly::AsciiCaseInsensitive()));
+  EXPECT_FALSE(a.startsWith("x", folly::AsciiCaseInsensitive()));
+  EXPECT_FALSE(a.startsWith("X", folly::AsciiCaseInsensitive()));
 
   {
     auto b = a;
@@ -361,6 +370,16 @@ TEST(StringPiece, Suffix) {
   EXPECT_FALSE(a.endsWith("xhello"));
   EXPECT_FALSE(a.endsWith("x"));
   EXPECT_FALSE(a.endsWith('x'));
+
+  EXPECT_TRUE(a.endsWith("", folly::AsciiCaseInsensitive()));
+  EXPECT_TRUE(a.endsWith("o", folly::AsciiCaseInsensitive()));
+  EXPECT_TRUE(a.endsWith("O", folly::AsciiCaseInsensitive()));
+  EXPECT_TRUE(a.endsWith("hello", folly::AsciiCaseInsensitive()));
+  EXPECT_TRUE(a.endsWith("hellO", folly::AsciiCaseInsensitive()));
+  EXPECT_FALSE(a.endsWith("xhello", folly::AsciiCaseInsensitive()));
+  EXPECT_FALSE(a.endsWith("Xhello", folly::AsciiCaseInsensitive()));
+  EXPECT_FALSE(a.endsWith("x", folly::AsciiCaseInsensitive()));
+  EXPECT_FALSE(a.endsWith("X", folly::AsciiCaseInsensitive()));
 
   {
     auto b = a;
@@ -946,17 +965,17 @@ TYPED_TEST(NeedleFinderTest, Needles256) {
   const auto maxValue = std::numeric_limits<StringPiece::value_type>::max();
   // make the size ~big to avoid any edge-case branches for tiny haystacks
   const int haystackSize = 50;
-  for (size_t i = minValue; i <= maxValue; i++) {  // <=
+  for (int i = minValue; i <= maxValue; i++) { // <=
     needles.push_back(i);
   }
   EXPECT_EQ(StringPiece::npos, this->find_first_byte_of("", needles));
-  for (size_t i = minValue; i <= maxValue; i++) {
+  for (int i = minValue; i <= maxValue; i++) {
     EXPECT_EQ(0, this->find_first_byte_of(string(haystackSize, i), needles));
   }
 
   needles.append("these are redundant characters");
   EXPECT_EQ(StringPiece::npos, this->find_first_byte_of("", needles));
-  for (size_t i = minValue; i <= maxValue; i++) {
+  for (int i = minValue; i <= maxValue; i++) {
     EXPECT_EQ(0, this->find_first_byte_of(string(haystackSize, i), needles));
   }
 }
@@ -1098,6 +1117,62 @@ TEST(RangeFunc, CArray) {
   testRangeFunc(x, 4);
 }
 
+TEST(RangeFunc, ConstexprCArray) {
+  static constexpr const int numArray[4] = {3, 17, 1, 9};
+  constexpr const auto numArrayRange = range(numArray);
+  EXPECT_EQ(17, numArrayRange[1]);
+  constexpr const auto numArrayRangeSize = numArrayRange.size();
+  EXPECT_EQ(4, numArrayRangeSize);
+}
+
+TEST(RangeFunc, ConstexprStdArray) {
+  static constexpr const std::array<int, 4> numArray = {{3, 17, 1, 9}};
+  constexpr const auto numArrayRange = range(numArray);
+  EXPECT_EQ(17, numArrayRange[1]);
+  constexpr const auto numArrayRangeSize = numArrayRange.size();
+  EXPECT_EQ(4, numArrayRangeSize);
+}
+
+TEST(RangeFunc, ConstexprStdArrayZero) {
+  static constexpr const std::array<int, 0> numArray = {};
+  constexpr const auto numArrayRange = range(numArray);
+  constexpr const auto numArrayRangeSize = numArrayRange.size();
+  EXPECT_EQ(0, numArrayRangeSize);
+}
+
+TEST(RangeFunc, ConstexprIteratorPair) {
+  static constexpr const int numArray[4] = {3, 17, 1, 9};
+  constexpr const auto numPtr = static_cast<const int*>(numArray);
+  constexpr const auto numIterRange = range(numPtr + 1, numPtr + 3);
+  EXPECT_EQ(1, numIterRange[1]);
+  constexpr const auto numIterRangeSize = numIterRange.size();
+  EXPECT_EQ(2, numIterRangeSize);
+}
+
+TEST(RangeFunc, ConstexprCollection) {
+  class IntCollection {
+   public:
+    constexpr IntCollection(const int* d, size_t s) : data_(d), size_(s) {}
+    constexpr const int* data() const {
+      return data_;
+    }
+    constexpr size_t size() const {
+      return size_;
+    }
+
+   private:
+    const int* data_;
+    size_t size_;
+  };
+  static constexpr const int numArray[4] = {3, 17, 1, 9};
+  constexpr const auto numPtr = static_cast<const int*>(numArray);
+  constexpr const auto numColl = IntCollection(numPtr + 1, 2);
+  constexpr const auto numCollRange = range(numColl);
+  EXPECT_EQ(1, numCollRange[1]);
+  constexpr const auto numCollRangeSize = numCollRange.size();
+  EXPECT_EQ(2, numCollRangeSize);
+}
+
 std::string get_rand_str(size_t size,
                          std::uniform_int_distribution<>& dist,
                          std::mt19937& gen) {
@@ -1229,4 +1304,50 @@ TEST(Range, Constructors) {
   EXPECT_EQ(subpiece1.size(), 2);
   EXPECT_EQ(subpiece1.begin(), subpiece2.begin());
   EXPECT_EQ(subpiece1.end(), subpiece2.end());
+}
+
+TEST(Range, ArrayConstructors) {
+  auto charArray = std::array<char, 4>{{'t', 'e', 's', 't'}};
+  auto constCharArray = std::array<char, 6>{{'f', 'o', 'o', 'b', 'a', 'r'}};
+  auto emptyArray = std::array<char, 0>{};
+
+  auto sp1 = StringPiece{charArray};
+  EXPECT_EQ(4, sp1.size());
+  EXPECT_EQ(charArray.data(), sp1.data());
+
+  auto sp2 = StringPiece(constCharArray);
+  EXPECT_EQ(6, sp2.size());
+  EXPECT_EQ(constCharArray.data(), sp2.data());
+
+  auto msp = MutableStringPiece(charArray);
+  EXPECT_EQ(4, msp.size());
+  EXPECT_EQ(charArray.data(), msp.data());
+
+  auto esp = StringPiece(emptyArray);
+  EXPECT_EQ(0, esp.size());
+  EXPECT_EQ(nullptr, esp.data());
+
+  auto emsp = MutableStringPiece(emptyArray);
+  EXPECT_EQ(0, emsp.size());
+  EXPECT_EQ(nullptr, emsp.data());
+
+  static constexpr std::array<int, 4> numArray = {{3, 17, 1, 9}};
+  constexpr auto numRange = Range<const int*>{numArray};
+  EXPECT_EQ(17, numRange[1]);
+
+  static constexpr std::array<int, 0> emptyNumArray{};
+  constexpr auto emptyNumRange = Range<const int*>{emptyNumArray};
+  EXPECT_EQ(0, emptyNumRange.size());
+}
+
+TEST(Range, ConstexprAccessors) {
+  constexpr StringPiece piece = range("hello");
+  static_assert(piece.size() == 6u, "");
+  static_assert(piece.end() - piece.begin() == 6u, "");
+  static_assert(piece.data() == piece.begin(), "");
+  static_assert(piece.start() == piece.begin(), "");
+  static_assert(piece.cbegin() == piece.begin(), "");
+  static_assert(piece.cend() == piece.end(), "");
+  static_assert(*piece.begin() == 'h', "");
+  static_assert(*(piece.end() - 1) == '\0', "");
 }

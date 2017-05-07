@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -287,9 +287,9 @@ void AsyncIOQueue::maybeDequeue() {
 
     // Interpose our completion callback
     auto& nextCb = op->notificationCallback();
-    op->setNotificationCallback([this, nextCb](AsyncIOOp* op) {
-      this->onCompleted(op);
-      if (nextCb) nextCb(op);
+    op->setNotificationCallback([this, nextCb](AsyncIOOp* op2) {
+      this->onCompleted(op2);
+      if (nextCb) nextCb(op2);
     });
 
     asyncIO_->submit(op);

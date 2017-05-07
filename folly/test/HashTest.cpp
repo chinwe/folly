@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 #include <folly/Hash.h>
 #include <folly/MapUtil.h>
-#include <gtest/gtest.h>
+#include <folly/portability/GTest.h>
 #include <stdint.h>
 #include <unordered_map>
 #include <utility>
@@ -229,6 +229,39 @@ TEST(Hash, hash_combine) {
   EXPECT_NE(hash_combine(1, 2), hash_combine(2, 1));
 }
 
+TEST(Hash, hash_bool) {
+  const auto hash = folly::Hash();
+  EXPECT_NE(hash(true), hash(false));
+}
+
+TEST(Hash, hash_bool10) {
+  const auto hash = folly::Hash();
+  std::set<size_t> values;
+  for (bool b1 : {false, true}) {
+    for (bool b2 : {false, true}) {
+      for (bool b3 : {false, true}) {
+        for (bool b4 : {false, true}) {
+          for (bool b5 : {false, true}) {
+            for (bool b6 : {false, true}) {
+              for (bool b7 : {false, true}) {
+                for (bool b8 : {false, true}) {
+                  for (bool b9 : {false, true}) {
+                    for (bool b10 : {false, true}) {
+                      values.insert(
+                          hash(b1, b2, b3, b4, b5, b6, b7, b8, b9, b10));
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  EXPECT_EQ(values.size(), 1 << 10);
+}
+
 TEST(Hash, std_tuple) {
   typedef std::tuple<int64_t, std::string, int32_t> tuple3;
   tuple3 t(42, "foo", 1);
@@ -312,12 +345,7 @@ TEST(Hash, Strings) {
               a4 = "10050525", b4 = "51107040";
   Range<const wchar_t*> w1 = range(L"10050517"), w2 = range(L"51107032"),
                         w3 = range(L"10050518"), w4 = range(L"51107033");
-  StringPieceHash h1;
   Hash h2;
-  EXPECT_EQ(h1(a1), h1(b1));
-  EXPECT_EQ(h1(a2), h1(b2));
-  EXPECT_EQ(h1(a3), h1(b3));
-  EXPECT_EQ(h1(a4), h1(b4));
   EXPECT_NE(h2(a1), h2(b1));
   EXPECT_NE(h2(a1), h2(b1));
   EXPECT_NE(h2(a2), h2(b2));

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,9 +20,7 @@
 #include <folly/Singleton.h>
 #include <folly/Benchmark.h>
 #include <folly/test/SingletonTestStructs.h>
-
-#include <glog/logging.h>
-#include <gtest/gtest.h>
+#include <folly/portability/GTest.h>
 
 /*
  * This test needs to be in its own file, as a standalone program.

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,10 +19,9 @@
 #include <semaphore.h>
 #include <thread>
 
-#include <gtest/gtest.h>
-
 #include <folly/Benchmark.h>
 #include <folly/portability/GFlags.h>
+#include <folly/portability/GTest.h>
 #include <folly/test/BatonTestHelpers.h>
 #include <folly/test/DeterministicSchedule.h>
 
@@ -32,11 +31,41 @@ using folly::detail::EmulatedFutexAtomic;
 
 typedef DeterministicSchedule DSched;
 
-BENCHMARK(baton_pingpong, iters) { run_pingpong_test<std::atomic>(iters); }
-
-BENCHMARK(baton_pingpong_emulated_futex, iters) {
-  run_pingpong_test<EmulatedFutexAtomic>(iters);
+BENCHMARK(baton_pingpong_single_poster_blocking, iters) {
+  run_pingpong_test<std::atomic, true, true>(iters);
 }
+
+BENCHMARK(baton_pingpong_multi_poster_blocking, iters) {
+  run_pingpong_test<std::atomic, false, true>(iters);
+}
+
+BENCHMARK(baton_pingpong_single_poster_nonblocking, iters) {
+  run_pingpong_test<std::atomic, true, false>(iters);
+}
+
+BENCHMARK(baton_pingpong_multi_poster_nonblocking, iters) {
+  run_pingpong_test<std::atomic, false, false>(iters);
+}
+
+BENCHMARK_DRAW_LINE()
+
+BENCHMARK(baton_pingpong_emulated_futex_single_poster_blocking, iters) {
+  run_pingpong_test<EmulatedFutexAtomic, true, true>(iters);
+}
+
+BENCHMARK(baton_pingpong_emulated_futex_multi_poster_blocking, iters) {
+  run_pingpong_test<EmulatedFutexAtomic, false, true>(iters);
+}
+
+BENCHMARK(baton_pingpong_emulated_futex_single_poster_nonblocking, iters) {
+  run_pingpong_test<EmulatedFutexAtomic, true, false>(iters);
+}
+
+BENCHMARK(baton_pingpong_emulated_futex_multi_poster_nonblocking, iters) {
+  run_pingpong_test<EmulatedFutexAtomic, false, false>(iters);
+}
+
+BENCHMARK_DRAW_LINE()
 
 BENCHMARK(posix_sem_pingpong, iters) {
   sem_t sems[3];

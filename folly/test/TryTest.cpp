@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,10 +14,9 @@
  * limitations under the License.
  */
 
-#include <gtest/gtest.h>
-
 #include <folly/Memory.h>
 #include <folly/Try.h>
+#include <folly/portability/GTest.h>
 
 using namespace folly;
 
@@ -65,9 +64,8 @@ TEST(Try, makeTryWith) {
 }
 
 TEST(Try, makeTryWithThrow) {
-  auto func = []() {
+  auto func = []() -> std::unique_ptr<int> {
     throw std::runtime_error("Runtime");
-    return folly::make_unique<int>(1);
   };
 
   auto result = makeTryWith(func);
@@ -86,7 +84,6 @@ TEST(Try, makeTryWithVoid) {
 TEST(Try, makeTryWithVoidThrow) {
   auto func = []() {
     throw std::runtime_error("Runtime");
-    return;
   };
 
   auto result = makeTryWith(func);

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -58,8 +58,13 @@ class ElfFile {
     kSystemError = -1,
     kInvalidElfFile = -2,
   };
+  // Open the ELF file. Does not throw on error.
   int openNoThrow(const char* name, bool readOnly=true,
                   const char** msg=nullptr) noexcept;
+
+  // Like openNoThrow, but follow .gnu_debuglink if present
+  int openAndFollow(const char* name, bool readOnly=true,
+                    const char** msg=nullptr) noexcept;
 
   // Open the ELF file. Throws on error.
   void open(const char* name, bool readOnly=true);

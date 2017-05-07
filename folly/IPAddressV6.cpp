@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -89,7 +89,7 @@ IPAddressV6::IPAddressV6(StringPiece addr) {
   if (!getaddrinfo(ip.c_str(), nullptr, &hints, &result)) {
     struct sockaddr_in6* ipAddr = (struct sockaddr_in6*)result->ai_addr;
     addr_.in6Addr_ = ipAddr->sin6_addr;
-    scope_ = ipAddr->sin6_scope_id;
+    scope_ = uint16_t(ipAddr->sin6_scope_id);
     freeaddrinfo(result);
   } else {
     throw IPAddressFormatException(
@@ -106,7 +106,7 @@ IPAddressV6::IPAddressV6(const in6_addr& src)
 // sockaddr_in6 constructor
 IPAddressV6::IPAddressV6(const sockaddr_in6& src)
   : addr_(src.sin6_addr)
-  , scope_(src.sin6_scope_id)
+  , scope_(uint16_t(src.sin6_scope_id))
 {
 }
 
@@ -126,7 +126,7 @@ IPAddressV6::AddressStorage::AddressStorage(MacAddress mac) {
   // See RFC 4291 sections 2.5.1, 2.5.6, and Appendix A
   const auto* macBytes = mac.bytes();
   memcpy(&bytes_.front(), "\xfe\x80\x00\x00\x00\x00\x00\x00", 8);
-  bytes_[8] = macBytes[0] ^ 0x02;
+  bytes_[8] = uint8_t(macBytes[0] ^ 0x02);
   bytes_[9] = macBytes[1];
   bytes_[10] = macBytes[2];
   bytes_[11] = 0xff;
@@ -134,6 +134,32 @@ IPAddressV6::AddressStorage::AddressStorage(MacAddress mac) {
   bytes_[13] = macBytes[3];
   bytes_[14] = macBytes[4];
   bytes_[15] = macBytes[5];
+}
+
+Optional<MacAddress> IPAddressV6::getMacAddressFromLinkLocal() const {
+  // Returned MacAddress must be constructed from a link-local IPv6 address.
+  if (!(addr_.bytes_[0] == 0xfe && addr_.bytes_[1] == 0x80 &&
+        addr_.bytes_[2] == 0x00 && addr_.bytes_[3] == 0x00 &&
+        addr_.bytes_[4] == 0x00 && addr_.bytes_[5] == 0x00 &&
+        addr_.bytes_[6] == 0x00 && addr_.bytes_[7] == 0x00 &&
+        addr_.bytes_[11] == 0xff && addr_.bytes_[12] == 0xfe)) {
+    return folly::none;
+  }
+  // The link-local address uses modified EUI-64 format,
+  // See RFC 4291 sections 2.5.1, 2.5.6, and Appendix A
+  std::array<uint8_t, MacAddress::SIZE> bytes;
+  // Step 1: first 8 bytes are fe:80:00:00:00:00:00:00, and can be stripped
+  // Step 2: invert the universal/local (U/L) flag (bit 7)
+  bytes[0] = addr_.bytes_[8] ^ 0x02;
+  // Step 3: copy thhese bytes are they are
+  bytes[1] = addr_.bytes_[9];
+  bytes[2] = addr_.bytes_[10];
+  // Step 4: strip bytes (0xfffe), which are bytes_[11] and bytes_[12]
+  // Step 5: copy the rest.
+  bytes[3] = addr_.bytes_[13];
+  bytes[4] = addr_.bytes_[14];
+  bytes[5] = addr_.bytes_[15];
+  return Optional<MacAddress>(MacAddress::fromBinary(range(bytes)));
 }
 
 void IPAddressV6::setFromBinary(ByteRange bytes) {
@@ -147,6 +173,34 @@ void IPAddressV6::setFromBinary(ByteRange bytes) {
   scope_ = 0;
 }
 
+// static
+IPAddressV6 IPAddressV6::fromInverseArpaName(const std::string& arpaname) {
+  auto piece = StringPiece(arpaname);
+  if (!piece.removeSuffix(".ip6.arpa")) {
+    throw IPAddressFormatException(sformat(
+        "Invalid input. Should end with 'ip6.arpa'. Got '{}'", arpaname));
+  }
+  std::vector<StringPiece> pieces;
+  split(".", piece, pieces);
+  if (pieces.size() != 32) {
+    throw IPAddressFormatException(sformat("Invalid input. Got '{}'", piece));
+  }
+  std::array<char, IPAddressV6::kToFullyQualifiedSize> ip;
+  size_t pos = 0;
+  int count = 0;
+  for (int p = pieces.size() - 1; p >= 0; p--) {
+    ip[pos] = pieces[p][0];
+    pos++;
+    count++;
+    // add ':' every 4 chars
+    if (count == 4 && pos < ip.size()) {
+      ip[pos++] = ':';
+      count = 0;
+    }
+  }
+  return IPAddressV6(folly::range(ip));
+}
+
 // public
 IPAddressV4 IPAddressV6::createIPv4() const {
   if (!isIPv4Mapped()) {
@@ -158,7 +212,7 @@ IPAddressV4 IPAddressV6::createIPv4() const {
 
 // convert two uint8_t bytes into a uint16_t as hibyte.lobyte
 static inline uint16_t unpack(uint8_t lobyte, uint8_t hibyte) {
-  return ((uint16_t)hibyte << 8) | (uint16_t)lobyte;
+  return uint16_t((uint16_t(hibyte) << 8) | lobyte);
 }
 
 // given a src string, unpack count*2 bytes into dest
@@ -315,12 +369,12 @@ bool IPAddressV6::isMulticast() const {
 
 uint8_t IPAddressV6::getMulticastFlags() const {
   DCHECK(isMulticast());
-  return ((addr_.bytes_[1] >> 4) & 0xf);
+  return uint8_t((addr_.bytes_[1] >> 4) & 0xf);
 }
 
 uint8_t IPAddressV6::getMulticastScope() const {
   DCHECK(isMulticast());
-  return (addr_.bytes_[1] & 0xf);
+  return uint8_t(addr_.bytes_[1] & 0xf);
 }
 
 IPAddressV6 IPAddressV6::getSolicitedNodeAddress() const {
@@ -372,6 +426,19 @@ string IPAddressV6::toFullyQualified() const {
 }
 
 // public
+string IPAddressV6::toInverseArpaName() const {
+  constexpr folly::StringPiece lut = "0123456789abcdef";
+  std::array<char, 32> a;
+  int j = 0;
+  for (int i = 15; i >= 0; i--) {
+    a[j] = (lut[bytes()[i] & 0xf]);
+    a[j + 1] = (lut[bytes()[i] >> 4]);
+    j += 2;
+  }
+  return sformat("{}.ip6.arpa", join(".", a));
+}
+
+// public
 uint8_t IPAddressV6::getNthMSByte(size_t byteIndex) const {
   const auto highestIndex = byteCount() - 1;
   if (byteIndex > highestIndex) {
@@ -384,7 +451,7 @@ uint8_t IPAddressV6::getNthMSByte(size_t byteIndex) const {
 
 // protected
 const ByteArray16 IPAddressV6::fetchMask(size_t numBits) {
-  static const uint8_t bits = bitCount();
+  static const size_t bits = bitCount();
   if (numBits > bits) {
     throw IPAddressFormatException("IPv6 addresses are 128 bits.");
   }

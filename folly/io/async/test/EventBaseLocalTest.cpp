@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,8 +33,7 @@
  */
 
 #include <folly/io/async/EventBaseLocal.h>
-#include <folly/io/async/test/Util.h>
-#include <gtest/gtest.h>
+#include <folly/portability/GTest.h>
 
 struct Foo {
   Foo(int n, std::function<void()> dtorFn):
@@ -72,7 +71,9 @@ TEST(EventBaseLocalTest, Basic) {
     EXPECT_EQ(dtorCnt, 2); // should dtor a Foo when evb2 destructs
 
   }
-  EXPECT_EQ(dtorCnt, 3); // should dtor a Foo when foo destructs
+  EXPECT_EQ(dtorCnt, 2); // should schedule Foo destructor, when foo destructs
+  evb1.loop();
+  EXPECT_EQ(dtorCnt, 3); // Foo will be destroyed in EventBase loop
 }
 
 TEST(EventBaseLocalTest, getOrCreate) {
@@ -87,4 +88,24 @@ TEST(EventBaseLocalTest, getOrCreate) {
   ints.erase(evb2);
   auto creator = []() { return new int(4); };
   EXPECT_EQ(ints.getOrCreateFn(evb2, creator), 4);
+}
+
+using IntPtr = std::unique_ptr<int>;
+
+TEST(EventBaseLocalTest, getOrCreateNoncopyable) {
+  folly::EventBase evb1;
+  folly::EventBaseLocal<IntPtr> ints;
+
+  EXPECT_EQ(ints.getOrCreate(evb1), IntPtr());
+  EXPECT_EQ(ints.getOrCreate(evb1, std::make_unique<int>(5)), IntPtr());
+
+  folly::EventBase evb2;
+  EXPECT_EQ(*ints.getOrCreate(evb2, std::make_unique<int>(5)), 5);
+}
+
+TEST(EventBaseLocalTest, emplaceNoncopyable) {
+  folly::EventBase evb;
+  folly::EventBaseLocal<IntPtr> ints;
+  ints.emplace(evb, std::make_unique<int>(42));
+  EXPECT_EQ(42, **ints.get(evb));
 }

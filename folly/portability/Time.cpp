@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,13 +25,14 @@ template <typename _Rep, typename _Period>
 static void duration_to_ts(
     std::chrono::duration<_Rep, _Period> d,
     struct timespec* ts) {
-  ts->tv_sec = std::chrono::duration_cast<std::chrono::seconds>(d).count();
-  ts->tv_nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    d % std::chrono::seconds(1))
-                    .count();
+  ts->tv_sec =
+      time_t(std::chrono::duration_cast<std::chrono::seconds>(d).count());
+  ts->tv_nsec = long(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                         d % std::chrono::seconds(1))
+                         .count());
 }
 
-#if !FOLLY_HAVE_CLOCK_GETTIME
+#if !FOLLY_HAVE_CLOCK_GETTIME || FOLLY_FORCE_CLOCK_GETTIME_DEFINITION
 #if __MACH__
 #include <errno.h>
 #include <mach/mach_init.h>
@@ -171,26 +172,22 @@ extern "C" int clock_getres(clockid_t clock_id, struct timespec* res) {
     return -1;
   }
 
+  static constexpr size_t kNsPerSec = 1000000000;
   switch (clock_id) {
-    case CLOCK_MONOTONIC: {
-      LARGE_INTEGER freq = performanceFrequency();
-      if (freq.QuadPart == -1) {
-        errno = EINVAL;
-        return -1;
-      }
-
-      static constexpr size_t kNsPerSec = 1000000000;
-
-      res->tv_sec = 0;
-      res->tv_nsec = (long)((kNsPerSec + (freq.QuadPart >> 1)) / freq.QuadPart);
-      if (res->tv_nsec < 1) {
-        res->tv_nsec = 1;
-      }
-
+    case CLOCK_REALTIME: {
+      constexpr auto perSec = double(std::chrono::system_clock::period::num) /
+          std::chrono::system_clock::period::den;
+      res->tv_sec = time_t(perSec);
+      res->tv_nsec = time_t(perSec * kNsPerSec);
       return 0;
     }
-
-    case CLOCK_REALTIME:
+    case CLOCK_MONOTONIC: {
+      constexpr auto perSec = double(std::chrono::steady_clock::period::num) /
+          std::chrono::steady_clock::period::den;
+      res->tv_sec = time_t(perSec);
+      res->tv_nsec = time_t(perSec * kNsPerSec);
+      return 0;
+    }
     case CLOCK_PROCESS_CPUTIME_ID:
     case CLOCK_THREAD_CPUTIME_ID: {
       DWORD adj, timeIncrement;
@@ -201,7 +198,7 @@ extern "C" int clock_getres(clockid_t clock_id, struct timespec* res) {
       }
 
       res->tv_sec = 0;
-      res->tv_nsec = timeIncrement * 100;
+      res->tv_nsec = long(timeIncrement * 100);
       return 0;
     }
 
@@ -219,8 +216,9 @@ extern "C" int clock_gettime(clockid_t clock_id, struct timespec* tp) {
 
   const auto unanosToTimespec = [](timespec* tp, unsigned_nanos t) -> int {
     static constexpr unsigned_nanos one_sec(std::chrono::seconds(1));
-    tp->tv_sec = std::chrono::duration_cast<std::chrono::seconds>(t).count();
-    tp->tv_nsec = (t % one_sec).count();
+    tp->tv_sec =
+        time_t(std::chrono::duration_cast<std::chrono::seconds>(t).count());
+    tp->tv_nsec = long((t % one_sec).count());
     return 0;
   };
 

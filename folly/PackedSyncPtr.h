@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -144,4 +144,9 @@ static_assert(sizeof(PackedSyncPtr<void>) == 8,
               "PackedSyncPtr should be only 8 bytes---something is "
               "messed up");
 
+template <typename T>
+std::ostream& operator<<(std::ostream& os, const PackedSyncPtr<T>& ptr) {
+  os << "PackedSyncPtr(" << ptr.get() << ", " << ptr.extra() << ")";
+  return os;
+}
 }

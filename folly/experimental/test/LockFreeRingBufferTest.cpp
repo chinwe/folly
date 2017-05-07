@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,13 +14,12 @@
  * limitations under the License.
  */
 
-#include <gtest/gtest.h>
 #include <iostream>
 #include <thread>
 
-#include <folly/detail/Futex.h>
 #include <folly/experimental/LockFreeRingBuffer.h>
 #include <folly/test/DeterministicSchedule.h>
+#include <folly/portability/GTest.h>
 
 namespace folly {
 

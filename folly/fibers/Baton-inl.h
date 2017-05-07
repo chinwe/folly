@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include <folly/fibers/Fiber.h>
-#include <folly/fibers/FiberManager.h>
+#include <folly/fibers/FiberManagerInternal.h>
 
 namespace folly {
 namespace fibers {
@@ -51,7 +51,7 @@ void Baton::waitFiber(FiberManager& fm, F&& mainContextFunc) {
       if (LIKELY(baton_fiber == NO_WAITER)) {
         continue;
       } else if (baton_fiber == POSTED || baton_fiber == TIMEOUT) {
-        fiber.setData(0);
+        fiber.resume();
         break;
       } else {
         throw std::logic_error("Some Fiber is already waiting on this Baton.");

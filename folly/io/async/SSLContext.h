@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,12 +24,6 @@
 #include <string>
 #include <random>
 
-// This has to come before SSL.
-#include <folly/portability/Sockets.h>
-
-#include <openssl/ssl.h>
-#include <openssl/tls1.h>
-
 #include <glog/logging.h>
 
 #ifndef FOLLY_NO_CONFIG
@@ -39,6 +33,7 @@
 #include <folly/Range.h>
 #include <folly/io/async/ssl/OpenSSLPtrTypes.h>
 #include <folly/io/async/ssl/OpenSSLUtils.h>
+#include <folly/portability/OpenSSL.h>
 
 namespace folly {
 
@@ -58,7 +53,7 @@ class PasswordCollector {
    * @param password Pass collected password back to OpenSSL
    * @param size     Maximum length of password including nullptr character
    */
-  virtual void getPassword(std::string& password, int size) = 0;
+  virtual void getPassword(std::string& password, int size) const = 0;
 
   /**
    * Return a description of this collector for logging purposes
@@ -282,7 +277,7 @@ class SSLContext {
   virtual std::shared_ptr<PasswordCollector> passwordCollector() {
     return collector_;
   }
-#if OPENSSL_VERSION_NUMBER >= 0x1000105fL && !defined(OPENSSL_NO_TLSEXT)
+#if FOLLY_OPENSSL_HAS_SNI
   /**
    * Provide SNI support
    */
@@ -335,7 +330,7 @@ class SSLContext {
    */
   typedef std::function<void(SSL* ssl)> ClientHelloCallback;
   virtual void addClientHelloCallback(const ClientHelloCallback& cb);
-#endif
+#endif // FOLLY_OPENSSL_HAS_SNI
 
   /**
    * Create an SSL object from this context.
@@ -455,6 +450,23 @@ class SSLContext {
   static void setSSLLockTypes(std::map<int, SSLLockType> lockTypes);
 
   /**
+   * Set the lock types and initialize OpenSSL in an atomic fashion.  This
+   * aborts if the library has already been initialized.
+   */
+  static void setSSLLockTypesAndInitOpenSSL(
+      std::map<int, SSLLockType> lockTypes);
+
+  /**
+   * Determine if the SSL lock with the specified id (i.e.
+   * CRYPTO_LOCK_SSL_SESSION) is disabled.  This should be called after
+   * initializeOpenSSL.  This will only check if the specified lock has been
+   * explicitly set to LOCK_NONE.
+   *
+   * This is not safe to call while setSSLLockTypes is being called.
+   */
+  static bool isSSLLockDisabled(int lockId);
+
+  /**
    * Examine OpenSSL's error stack, and return a string description of the
    * errors.
    *
@@ -518,7 +530,7 @@ class SSLContext {
   bool checkPeerName_;
   std::string peerFixedName_;
   std::shared_ptr<PasswordCollector> collector_;
-#if OPENSSL_VERSION_NUMBER >= 0x1000105fL && !defined(OPENSSL_NO_TLSEXT)
+#if FOLLY_OPENSSL_HAS_SNI
   ServerNameCallback serverNameCb_;
   std::vector<ClientHelloCallback> clientHelloCbs_;
 #endif
@@ -552,7 +564,7 @@ class SSLContext {
     SSL* ssl, unsigned char **out, unsigned char *outlen,
     const unsigned char *server, unsigned int server_len, void *args);
 
-#if OPENSSL_VERSION_NUMBER >= 0x1000200fL && !defined(OPENSSL_NO_TLSEXT)
+#if FOLLY_OPENSSL_HAS_ALPN
   static int alpnSelectCallback(SSL* ssl,
                                 const unsigned char** out,
                                 unsigned char* outlen,
@@ -566,7 +578,7 @@ class SSLContext {
 
   static int passwordCallback(char* password, int size, int, void* data);
 
-#if OPENSSL_VERSION_NUMBER >= 0x1000105fL && !defined(OPENSSL_NO_TLSEXT)
+#if FOLLY_OPENSSL_HAS_SNI
   /**
    * The function that will be called directly from openssl
    * in order for the application to get the tlsext_hostname just after
@@ -589,6 +601,7 @@ class SSLContext {
   // Functions are called when locked by the calling function.
   static void initializeOpenSSLLocked();
   static void cleanupOpenSSLLocked();
+  static void setSSLLockTypesLocked(std::map<int, SSLLockType> inLockTypes);
 };
 
 typedef std::shared_ptr<SSLContext> SSLContextPtr;

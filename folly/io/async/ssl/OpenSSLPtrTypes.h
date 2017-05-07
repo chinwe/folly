@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,18 +18,8 @@
 
 #include <glog/logging.h>
 
-#include <openssl/asn1.h>
-#include <openssl/bio.h>
-#include <openssl/bn.h>
-#ifndef OPENSSL_NO_EC
-#include <openssl/ec.h>
-#endif
-#include <openssl/evp.h>
-#include <openssl/rsa.h>
-#include <openssl/ssl.h>
-#include <openssl/x509.h>
-
 #include <folly/Memory.h>
+#include <folly/portability/OpenSSL.h>
 
 namespace folly {
 namespace ssl {
@@ -64,11 +54,19 @@ using EvpPkeyCtxUniquePtr = std::unique_ptr<EVP_PKEY_CTX, EvpPkeyCtxDeleter>;
 #else
 struct EVP_PKEY_CTX;
 #endif
+
 using EvpMdCtxDeleter =
-    folly::static_function_deleter<EVP_MD_CTX, &EVP_MD_CTX_destroy>;
+    folly::static_function_deleter<EVP_MD_CTX, &EVP_MD_CTX_free>;
 using EvpMdCtxUniquePtr = std::unique_ptr<EVP_MD_CTX, EvpMdCtxDeleter>;
 
+// HMAC
+using HmacCtxDeleter = folly::static_function_deleter<HMAC_CTX, &HMAC_CTX_free>;
+using HmacCtxUniquePtr = std::unique_ptr<HMAC_CTX, HmacCtxDeleter>;
+
 // BIO
+using BioMethodDeleter =
+    folly::static_function_deleter<BIO_METHOD, &BIO_meth_free>;
+using BioMethodUniquePtr = std::unique_ptr<BIO_METHOD, BioMethodDeleter>;
 using BioDeleter = folly::static_function_deleter<BIO, &BIO_vfree>;
 using BioUniquePtr = std::unique_ptr<BIO, BioDeleter>;
 using BioChainDeleter = folly::static_function_deleter<BIO, &BIO_free_all>;
@@ -83,6 +81,13 @@ using RsaUniquePtr = std::unique_ptr<RSA, RsaDeleter>;
 #ifndef OPENSSL_NO_EC
 using EcKeyDeleter = folly::static_function_deleter<EC_KEY, &EC_KEY_free>;
 using EcKeyUniquePtr = std::unique_ptr<EC_KEY, EcKeyDeleter>;
+using EcGroupDeleter = folly::static_function_deleter<EC_GROUP, &EC_GROUP_free>;
+using EcGroupUniquePtr = std::unique_ptr<EC_GROUP, EcGroupDeleter>;
+using EcPointDeleter = folly::static_function_deleter<EC_POINT, &EC_POINT_free>;
+using EcPointUniquePtr = std::unique_ptr<EC_POINT, EcPointDeleter>;
+using EcdsaSignDeleter =
+    folly::static_function_deleter<ECDSA_SIG, &ECDSA_SIG_free>;
+using EcdsaSigUniquePtr = std::unique_ptr<ECDSA_SIG, EcdsaSignDeleter>;
 #endif
 
 // BIGNUMs

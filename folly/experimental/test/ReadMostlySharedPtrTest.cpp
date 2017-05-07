@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,11 +20,11 @@
 #include <mutex>
 #include <folly/Memory.h>
 #include <condition_variable>
-#include <gtest/gtest.h>
 
 #include <folly/Baton.h>
 #include <folly/experimental/RCURefCount.h>
 #include <folly/experimental/ReadMostlySharedPtr.h>
+#include <folly/portability/GTest.h>
 
 using folly::ReadMostlyMainPtr;
 using folly::ReadMostlyWeakPtr;
@@ -211,10 +211,12 @@ TEST_F(ReadMostlySharedPtrTest, Ctor) {
 }
 
 TEST_F(ReadMostlySharedPtrTest, ClearingCache) {
+  std::atomic<int> cnt1{0};
+  std::atomic<int> cnt2{0};
+
   ReadMostlyMainPtr<TestObject> ptr;
 
   // Store 1.
-  std::atomic<int> cnt1{0};
   ptr.reset(folly::make_unique<TestObject>(1, cnt1));
 
   Coordinator c;
@@ -230,7 +232,6 @@ TEST_F(ReadMostlySharedPtrTest, ClearingCache) {
   EXPECT_EQ(1, cnt1.load());
 
   // Store 2 and check that 1 is destroyed.
-  std::atomic<int> cnt2{0};
   ptr.reset(folly::make_unique<TestObject>(2, cnt2));
   EXPECT_EQ(0, cnt1.load());
 
@@ -296,4 +297,54 @@ TEST_F(ReadMostlySharedPtrTest, ReadMostlyMainPtrDeleter) {
   }
 
   EXPECT_EQ(1, useGlobalCalls);
+}
+
+TEST_F(ReadMostlySharedPtrTest, nullptr) {
+  {
+    ReadMostlyMainPtr<int, TestRefCount> nptr;
+    EXPECT_TRUE(nptr == nullptr);
+    EXPECT_TRUE(nullptr == nptr);
+    EXPECT_EQ(nptr, nullptr);
+    EXPECT_EQ(nullptr, nptr);
+    EXPECT_FALSE(nptr);
+    EXPECT_TRUE(!nptr);
+
+    ReadMostlyMainPtr<int, TestRefCount> ptr(std::make_shared<int>(42));
+    EXPECT_FALSE(ptr == nullptr);
+    EXPECT_FALSE(nullptr == ptr);
+    EXPECT_NE(ptr, nullptr);
+    EXPECT_NE(nullptr, ptr);
+    EXPECT_FALSE(!ptr);
+    EXPECT_TRUE(ptr);
+  }
+  {
+    ReadMostlySharedPtr<int, TestRefCount> nptr;
+    EXPECT_TRUE(nptr == nullptr);
+    EXPECT_TRUE(nullptr == nptr);
+    EXPECT_EQ(nptr, nullptr);
+    EXPECT_EQ(nullptr, nptr);
+    EXPECT_FALSE(nptr);
+    EXPECT_TRUE(!nptr);
+
+    ReadMostlyMainPtr<int, TestRefCount> ptr(std::make_shared<int>(42));
+    EXPECT_FALSE(ptr == nullptr);
+    EXPECT_FALSE(nullptr == ptr);
+    EXPECT_NE(ptr, nullptr);
+    EXPECT_NE(nullptr, ptr);
+    EXPECT_FALSE(!ptr);
+    EXPECT_TRUE(ptr);
+  }
+}
+
+TEST_F(ReadMostlySharedPtrTest, getStdShared) {
+  const ReadMostlyMainPtr<int> rmmp1(std::make_shared<int>(42));
+
+  ReadMostlyMainPtr<int> rmmp2;
+  rmmp2.reset(rmmp1.getStdShared());
+
+  const ReadMostlySharedPtr<int> rmsp1 = rmmp1.getShared();
+  ReadMostlySharedPtr<int> rmsp2(rmsp1);
+
+  // No conditions to check; we just wanted to ensure this compiles.
+  SUCCEED();
 }

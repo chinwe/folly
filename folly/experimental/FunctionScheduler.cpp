@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -63,7 +63,7 @@ struct PoissonDistributionFunctor {
 
 struct UniformDistributionFunctor {
   std::default_random_engine generator;
-  std::uniform_int_distribution<> dist;
+  std::uniform_int_distribution<milliseconds::rep> dist;
 
   UniformDistributionFunctor(milliseconds minInterval, milliseconds maxInterval)
       : generator(Random::rand32()),
@@ -96,12 +96,13 @@ void FunctionScheduler::addFunction(Function<void()>&& cb,
                                     milliseconds interval,
                                     StringPiece nameID,
                                     milliseconds startDelay) {
-  addFunctionGenericDistribution(
+  addFunctionInternal(
       std::move(cb),
       ConstIntervalFunctor(interval),
       nameID.str(),
       to<std::string>(interval.count(), "ms"),
-      startDelay);
+      startDelay,
+      false /*runOnce*/);
 }
 
 void FunctionScheduler::addFunction(Function<void()>&& cb,
@@ -110,15 +111,29 @@ void FunctionScheduler::addFunction(Function<void()>&& cb,
                                     StringPiece nameID,
                                     milliseconds startDelay) {
   if (latencyDistr.isPoisson) {
-    addFunctionGenericDistribution(
+    addFunctionInternal(
         std::move(cb),
         PoissonDistributionFunctor(latencyDistr.poissonMean),
         nameID.str(),
         to<std::string>(latencyDistr.poissonMean, "ms (Poisson mean)"),
-        startDelay);
+        startDelay,
+        false /*runOnce*/);
   } else {
     addFunction(std::move(cb), interval, nameID, startDelay);
   }
+}
+
+void FunctionScheduler::addFunctionOnce(
+    Function<void()>&& cb,
+    StringPiece nameID,
+    milliseconds startDelay) {
+  addFunctionInternal(
+      std::move(cb),
+      ConstIntervalFunctor(milliseconds::zero()),
+      nameID.str(),
+      "once",
+      startDelay,
+      true /*runOnce*/);
 }
 
 void FunctionScheduler::addFunctionUniformDistribution(
@@ -127,13 +142,14 @@ void FunctionScheduler::addFunctionUniformDistribution(
     milliseconds maxInterval,
     StringPiece nameID,
     milliseconds startDelay) {
-  addFunctionGenericDistribution(
+  addFunctionInternal(
       std::move(cb),
       UniformDistributionFunctor(minInterval, maxInterval),
       nameID.str(),
       to<std::string>(
           "[", minInterval.count(), " , ", maxInterval.count(), "] ms"),
-      startDelay);
+      startDelay,
+      false /*runOnce*/);
 }
 
 void FunctionScheduler::addFunctionGenericDistribution(
@@ -142,6 +158,22 @@ void FunctionScheduler::addFunctionGenericDistribution(
     const std::string& nameID,
     const std::string& intervalDescr,
     milliseconds startDelay) {
+  addFunctionInternal(
+      std::move(cb),
+      std::move(intervalFunc),
+      nameID,
+      intervalDescr,
+      startDelay,
+      false /*runOnce*/);
+}
+
+void FunctionScheduler::addFunctionInternal(
+    Function<void()>&& cb,
+    IntervalDistributionFunc&& intervalFunc,
+    const std::string& nameID,
+    const std::string& intervalDescr,
+    milliseconds startDelay,
+    bool runOnce) {
   if (!cb) {
     throw std::invalid_argument(
         "FunctionScheduler: Scheduled function must be set");
@@ -177,7 +209,8 @@ void FunctionScheduler::addFunctionGenericDistribution(
           std::move(intervalFunc),
           nameID,
           intervalDescr,
-          startDelay));
+          startDelay,
+          runOnce));
 }
 
 bool FunctionScheduler::cancelFunction(StringPiece nameID) {
@@ -188,6 +221,25 @@ bool FunctionScheduler::cancelFunction(StringPiece nameID) {
     // The running thread will see this and won't reschedule the function.
     currentFunction_ = nullptr;
     return true;
+  }
+
+  for (auto it = functions_.begin(); it != functions_.end(); ++it) {
+    if (it->isValid() && it->name == nameID) {
+      cancelFunction(l, it);
+      return true;
+    }
+  }
+  return false;
+}
+
+bool FunctionScheduler::cancelFunctionAndWait(StringPiece nameID) {
+  std::unique_lock<std::mutex> l(mutex_);
+
+  auto* currentFunction = currentFunction_;
+  if (currentFunction && currentFunction->name == nameID) {
+    runningCondvar_.wait(l, [currentFunction, this]() {
+      return currentFunction != currentFunction_;
+    });
   }
 
   for (auto it = functions_.begin(); it != functions_.end(); ++it) {
@@ -226,6 +278,14 @@ void FunctionScheduler::cancelAllFunctions() {
   currentFunction_ = nullptr;
 }
 
+void FunctionScheduler::cancelAllFunctionsAndWait() {
+  std::unique_lock<std::mutex> l(mutex_);
+  if (currentFunction_) {
+    runningCondvar_.wait(l, [this]() { return currentFunction_ == nullptr; });
+  }
+  functions_.clear();
+}
+
 bool FunctionScheduler::resetFunctionTimer(StringPiece nameID) {
   std::unique_lock<std::mutex> l(mutex_);
   if (currentFunction_ && currentFunction_->name == nameID) {
@@ -258,8 +318,6 @@ bool FunctionScheduler::start() {
     return false;
   }
 
-  running_ = true;
-
   VLOG(1) << "Starting FunctionScheduler with " << functions_.size()
           << " functions.";
   auto now = steady_clock::now();
@@ -274,20 +332,23 @@ bool FunctionScheduler::start() {
   std::make_heap(functions_.begin(), functions_.end(), fnCmp_);
 
   thread_ = std::thread([&] { this->run(); });
+  running_ = true;
+
   return true;
 }
 
-void FunctionScheduler::shutdown() {
+bool FunctionScheduler::shutdown() {
   {
     std::lock_guard<std::mutex> g(mutex_);
     if (!running_) {
-      return;
+      return false;
     }
 
     running_ = false;
     runningCondvar_.notify_one();
   }
   thread_.join();
+  return true;
 }
 
 void FunctionScheduler::run() {
@@ -321,6 +382,7 @@ void FunctionScheduler::run() {
     if (sleepTime < milliseconds::zero()) {
       // We need to run this function now
       runOneFunction(lock, now);
+      runningCondvar_.notify_all();
     } else {
       // Re-add the function to the heap, and wait until we actually
       // need to run it.
@@ -379,6 +441,11 @@ void FunctionScheduler::runOneFunction(std::unique_lock<std::mutex>& lock,
   if (!currentFunction_) {
     // The function was cancelled while we were running it.
     // We shouldn't reschedule it;
+    return;
+  }
+  if (currentFunction_->runOnce) {
+    // Don't reschedule if the function only needed to run once.
+    currentFunction_ = nullptr;
     return;
   }
   // Clear currentFunction_

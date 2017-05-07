@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -76,7 +76,7 @@ inline size_t splitPrefix(StringPiece& in,
   auto p = in.find_first_of(kCRLF);
   if (p != std::string::npos) {
     const auto in_start = in.data();
-    auto delim_len = 1;
+    size_t delim_len = 1;
     in.advance(p);
     // Either remove an MS-DOS CR-LF 2-byte newline, or eat 1 byte at a time.
     if (in.removePrefix(kCRLF)) {

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@ namespace folly {
 
 namespace detail {
 
-void handleMallctlError(const char* cmd, int err);
+[[noreturn]] void handleMallctlError(const char* cmd, int err);
 
 template <typename T>
 void mallctlHelper(const char* cmd, T* out, T* in) {

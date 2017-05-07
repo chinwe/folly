@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -122,6 +122,23 @@ void IPAddressV4::setFromBinary(ByteRange bytes) {
   memcpy(&addr_.inAddr_.s_addr, bytes.data(), sizeof(in_addr));
 }
 
+// static
+IPAddressV4 IPAddressV4::fromInverseArpaName(const std::string& arpaname) {
+  auto piece = StringPiece(arpaname);
+  // input must be something like 1.0.168.192.in-addr.arpa
+  if (!piece.removeSuffix(".in-addr.arpa")) {
+    throw IPAddressFormatException(
+        sformat("input does not end with '.in-addr.arpa': '{}'", arpaname));
+  }
+  std::vector<StringPiece> pieces;
+  split(".", piece, pieces);
+  if (pieces.size() != 4) {
+    throw IPAddressFormatException(sformat("Invalid input. Got {}", piece));
+  }
+  // reverse 1.0.168.192 -> 192.168.0.1
+  return IPAddressV4(join(".", pieces.rbegin(), pieces.rend()));
+}
+
 // public
 IPAddressV6 IPAddressV4::createIPv6() const {
   ByteArray16 ba{};
@@ -225,6 +242,16 @@ string IPAddressV4::str() const {
 }
 
 // public
+string IPAddressV4::toInverseArpaName() const {
+  return sformat(
+      "{}.{}.{}.{}.in-addr.arpa",
+      addr_.bytes_[3],
+      addr_.bytes_[2],
+      addr_.bytes_[1],
+      addr_.bytes_[0]);
+}
+
+// public
 uint8_t IPAddressV4::getNthMSByte(size_t byteIndex) const {
   const auto highestIndex = byteCount() - 1;
   if (byteIndex > highestIndex) {
@@ -236,7 +263,7 @@ uint8_t IPAddressV4::getNthMSByte(size_t byteIndex) const {
 }
 // protected
 const ByteArray4 IPAddressV4::fetchMask(size_t numBits) {
-  static const uint8_t bits = bitCount();
+  static const size_t bits = bitCount();
   if (numBits > bits) {
     throw IPAddressFormatException(
         to<std::string>("IPv4 addresses are 32 bits"));

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -68,6 +68,7 @@
 #include <vector>
 
 #include <boost/operators.hpp>
+#include <folly/portability/BitsFunctexcept.h>
 
 namespace folly {
 
@@ -121,22 +122,20 @@ namespace detail {
   {
     const typename OurContainer::value_compare& cmp(sorted.value_comp());
     if (hint == cont.end() || cmp(value, *hint)) {
-      if (hint == cont.begin()) {
-        po.increase_capacity(cont, cont.begin());
-        return cont.insert(cont.begin(), std::move(value));
-      }
-      if (cmp(*(hint - 1), value)) {
+      if (hint == cont.begin() || cmp(*(hint - 1), value)) {
         hint = po.increase_capacity(cont, hint);
         return cont.insert(hint, std::move(value));
+      } else {
+        return sorted.insert(std::move(value)).first;
       }
-      return sorted.insert(std::move(value)).first;
     }
 
     if (cmp(*hint, value)) {
       if (hint + 1 == cont.end() || cmp(value, *(hint + 1))) {
-        typename OurContainer::iterator it =
-          po.increase_capacity(cont, hint + 1);
-        return cont.insert(it, std::move(value));
+        hint = po.increase_capacity(cont, hint + 1);
+        return cont.insert(hint, std::move(value));
+      } else {
+        return sorted.insert(std::move(value)).first;
       }
     }
 
@@ -144,6 +143,43 @@ namespace detail {
     return hint;
   }
 
+  template <class OurContainer, class Vector, class InputIterator>
+  void bulk_insert(
+      OurContainer& sorted,
+      Vector& cont,
+      InputIterator first,
+      InputIterator last) {
+    // prevent deref of middle where middle == cont.end()
+    if (first == last) {
+      return;
+    }
+
+    auto const& cmp(sorted.value_comp());
+
+    int const d = distance_if_multipass(first, last);
+    if (d != -1) {
+      cont.reserve(cont.size() + d);
+    }
+    auto const prev_size = cont.size();
+
+    std::copy(first, last, std::back_inserter(cont));
+    auto const middle = cont.begin() + prev_size;
+    if (!std::is_sorted(middle, cont.end(), cmp)) {
+      std::sort(middle, cont.end(), cmp);
+    }
+    if (middle != cont.begin() && cmp(*middle, *(middle - 1))) {
+      std::inplace_merge(cont.begin(), middle, cont.end(), cmp);
+      cont.erase(
+          std::unique(
+              cont.begin(),
+              cont.end(),
+              [&](typename OurContainer::value_type const& a,
+                  typename OurContainer::value_type const& b) {
+                return !cmp(a, b) && !cmp(b, a);
+              }),
+          cont.end());
+    }
+  }
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -215,7 +251,7 @@ public:
     insert(first, last);
   }
 
-  explicit sorted_vector_set(
+  /* implicit */ sorted_vector_set(
       std::initializer_list<value_type> list,
       const Compare& comp = Compare(),
       const Allocator& alloc = Allocator())
@@ -224,12 +260,30 @@ public:
     insert(list.begin(), list.end());
   }
 
+  // Construct a sorted_vector_set by stealing the storage of a prefilled
+  // container. The container need not be sorted already. This supports
+  // bulk construction of sorted_vector_set with zero allocations, not counting
+  // those performed by the caller. (The iterator range constructor performs at
+  // least one allocation).
+  //
+  // Note that `sorted_vector_set(const ContainerT& container)` is not provided,
+  // since the purpose of this constructor is to avoid an unnecessary copy.
+  explicit sorted_vector_set(
+      ContainerT&& container,
+      const Compare& comp = Compare())
+      : m_(comp, container.get_allocator()) {
+    std::sort(container.begin(), container.end(), value_comp());
+    m_.cont_.swap(container);
+  }
+
   key_compare key_comp() const { return m_; }
   value_compare value_comp() const { return m_; }
 
   iterator begin()                      { return m_.cont_.begin();  }
   iterator end()                        { return m_.cont_.end();    }
+  const_iterator cbegin() const         { return m_.cont_.cbegin(); }
   const_iterator begin() const          { return m_.cont_.begin();  }
+  const_iterator cend() const           { return m_.cont_.cend();   }
   const_iterator end() const            { return m_.cont_.end();    }
   reverse_iterator rbegin()             { return m_.cont_.rbegin(); }
   reverse_iterator rend()               { return m_.cont_.rend();   }
@@ -268,17 +322,11 @@ public:
 
   template<class InputIterator>
   void insert(InputIterator first, InputIterator last) {
-    int d = detail::distance_if_multipass(first, last);
-    if (d != -1) {
-      m_.cont_.reserve(m_.cont_.size() + d);
-    }
-    for (; first != last; ++first) {
-      insert(end(), *first);
-    }
+    detail::bulk_insert(*this, m_.cont_, first, last);
   }
 
   size_type erase(const key_type& key) {
-    iterator it = lower_bound(key);
+    iterator it = find(key);
     if (it == end()) {
       return 0;
     }
@@ -465,12 +513,30 @@ public:
     insert(list.begin(), list.end());
   }
 
+  // Construct a sorted_vector_map by stealing the storage of a prefilled
+  // container. The container need not be sorted already. This supports
+  // bulk construction of sorted_vector_map with zero allocations, not counting
+  // those performed by the caller. (The iterator range constructor performs at
+  // least one allocation).
+  //
+  // Note that `sorted_vector_map(const ContainerT& container)` is not provided,
+  // since the purpose of this constructor is to avoid an unnecessary copy.
+  explicit sorted_vector_map(
+      ContainerT&& container,
+      const Compare& comp = Compare())
+      : m_(value_compare(comp), container.get_allocator()) {
+    std::sort(container.begin(), container.end(), value_comp());
+    m_.cont_.swap(container);
+  }
+
   key_compare key_comp() const { return m_; }
   value_compare value_comp() const { return m_; }
 
   iterator begin()                      { return m_.cont_.begin();  }
   iterator end()                        { return m_.cont_.end();    }
+  const_iterator cbegin() const         { return m_.cont_.cbegin(); }
   const_iterator begin() const          { return m_.cont_.begin();  }
+  const_iterator cend() const           { return m_.cont_.cend();   }
   const_iterator end() const            { return m_.cont_.end();    }
   reverse_iterator rbegin()             { return m_.cont_.rbegin(); }
   reverse_iterator rend()               { return m_.cont_.rend();   }
@@ -509,13 +575,7 @@ public:
 
   template<class InputIterator>
   void insert(InputIterator first, InputIterator last) {
-    int d = detail::distance_if_multipass(first, last);
-    if (d != -1) {
-      m_.cont_.reserve(m_.cont_.size() + d);
-    }
-    for (; first != last; ++first) {
-      insert(end(), *first);
-    }
+    detail::bulk_insert(*this, m_.cont_, first, last);
   }
 
   size_type erase(const key_type& key) {
@@ -554,7 +614,7 @@ public:
     if (it != end()) {
       return it->second;
     }
-    throw std::out_of_range("sorted_vector_map::at");
+    std::__throw_out_of_range("sorted_vector_map::at");
   }
 
   const mapped_type& at(const key_type& key) const {
@@ -562,7 +622,7 @@ public:
     if (it != end()) {
       return it->second;
     }
-    throw std::out_of_range("sorted_vector_map::at");
+    std::__throw_out_of_range("sorted_vector_map::at");
   }
 
   size_type count(const key_type& key) const {

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -229,7 +229,7 @@ void SocketAddress::setFromPath(StringPiece path) {
   }
 
   size_t len = path.size();
-  storage_.un.len = offsetof(struct sockaddr_un, sun_path) + len;
+  storage_.un.len = socklen_t(offsetof(struct sockaddr_un, sun_path) + len);
   memcpy(storage_.un.addr->sun_path, path.data(), len);
   // If there is room, put a terminating NUL byte in sun_path.  In general the
   // path should be NUL terminated, although getsockname() and getpeername()
@@ -325,8 +325,11 @@ void SocketAddress::setFromSockaddr(const struct sockaddr_un* address,
       "with length too long for a sockaddr_un");
   }
 
-  prepFamilyChange(AF_UNIX);
-  memcpy(storage_.un.addr, address, addrlen);
+  if (!external_) {
+    storage_.un.init();
+  }
+  external_ = true;
+  memcpy(storage_.un.addr, address, size_t(addrlen));
   updateUnixAddressLength(addrlen);
 
   // Fill the rest with 0s, just for safety
@@ -362,26 +365,27 @@ socklen_t SocketAddress::getActualSize() const {
 }
 
 std::string SocketAddress::getFullyQualified() const {
-  auto family = getFamily();
-  if (family != AF_INET && family != AF_INET6) {
+  if (!isFamilyInet()) {
     throw std::invalid_argument("Can't get address str for non ip address");
   }
   return storage_.addr.toFullyQualified();
 }
 
 std::string SocketAddress::getAddressStr() const {
-  char buf[INET6_ADDRSTRLEN];
-  getAddressStr(buf, sizeof(buf));
-  return buf;
+  if (!isFamilyInet()) {
+    throw std::invalid_argument("Can't get address str for non ip address");
+  }
+  return storage_.addr.str();
+}
+
+bool SocketAddress::isFamilyInet() const {
+  auto family = getFamily();
+  return family == AF_INET || family == AF_INET6;
 }
 
 void SocketAddress::getAddressStr(char* buf, size_t buflen) const {
-  auto family = getFamily();
-  if (family != AF_INET && family != AF_INET6) {
-    throw std::invalid_argument("Can't get address str for non ip address");
-  }
-  std::string ret = storage_.addr.str();
-  size_t len = std::min(buflen, ret.size());
+  auto ret = getAddressStr();
+  size_t len = std::min(buflen - 1, ret.size());
   memcpy(buf, ret.data(), len);
   buf[len] = '\0';
 }
@@ -454,12 +458,13 @@ std::string SocketAddress::getPath() const {
   }
   if (storage_.un.addr->sun_path[0] == '\0') {
     // abstract namespace
-    return std::string(storage_.un.addr->sun_path, storage_.un.pathLength());
+    return std::string(
+        storage_.un.addr->sun_path, size_t(storage_.un.pathLength()));
   }
 
-  return std::string(storage_.un.addr->sun_path,
-                     strnlen(storage_.un.addr->sun_path,
-                             storage_.un.pathLength()));
+  return std::string(
+      storage_.un.addr->sun_path,
+      strnlen(storage_.un.addr->sun_path, size_t(storage_.un.pathLength())));
 }
 
 std::string SocketAddress::describe() const {
@@ -473,9 +478,9 @@ std::string SocketAddress::describe() const {
       return "<abstract unix address>";
     }
 
-    return std::string(storage_.un.addr->sun_path,
-                       strnlen(storage_.un.addr->sun_path,
-                               storage_.un.pathLength()));
+    return std::string(
+        storage_.un.addr->sun_path,
+        strnlen(storage_.un.addr->sun_path, size_t(storage_.un.pathLength())));
   }
   switch (getFamily()) {
     case AF_UNSPEC:
@@ -521,9 +526,10 @@ bool SocketAddress::operator==(const SocketAddress& other) const {
     if (storage_.un.len != other.storage_.un.len) {
       return false;
     }
-    int cmp = memcmp(storage_.un.addr->sun_path,
-                     other.storage_.un.addr->sun_path,
-                     storage_.un.pathLength());
+    int cmp = memcmp(
+        storage_.un.addr->sun_path,
+        other.storage_.un.addr->sun_path,
+        size_t(storage_.un.pathLength()));
     return cmp == 0;
   }
 
@@ -544,7 +550,7 @@ bool SocketAddress::prefixMatch(const SocketAddress& other,
   if (other.getFamily() != getFamily()) {
     return false;
   }
-  int mask_length = 128;
+  uint8_t mask_length = 128;
   switch (getFamily()) {
     case AF_INET:
       mask_length = 32;
@@ -568,10 +574,10 @@ size_t SocketAddress::hash() const {
   if (external_) {
     enum { kUnixPathMax = sizeof(storage_.un.addr->sun_path) };
     const char *path = storage_.un.addr->sun_path;
-    size_t pathLength = storage_.un.pathLength();
+    auto pathLength = storage_.un.pathLength();
     // TODO: this probably could be made more efficient
-    for (unsigned int n = 0; n < pathLength; ++n) {
-      boost::hash_combine(seed, folly::hash::twang_mix64(path[n]));
+    for (off_t n = 0; n < pathLength; ++n) {
+      boost::hash_combine(seed, folly::hash::twang_mix64(uint64_t(path[n])));
     }
   }
 
@@ -627,7 +633,7 @@ struct addrinfo* SocketAddress::getAddrInfo(const char* host,
 }
 
 void SocketAddress::setFromAddrInfo(const struct addrinfo* info) {
-  setFromSockaddr(info->ai_addr, info->ai_addrlen);
+  setFromSockaddr(info->ai_addr, socklen_t(info->ai_addrlen));
 }
 
 void SocketAddress::setFromLocalAddr(const struct addrinfo* info) {
@@ -635,13 +641,13 @@ void SocketAddress::setFromLocalAddr(const struct addrinfo* info) {
   // can be mapped into IPv6 space.
   for (const struct addrinfo* ai = info; ai != nullptr; ai = ai->ai_next) {
     if (ai->ai_family == AF_INET6) {
-      setFromSockaddr(ai->ai_addr, ai->ai_addrlen);
+      setFromSockaddr(ai->ai_addr, socklen_t(ai->ai_addrlen));
       return;
     }
   }
 
   // Otherwise, just use the first address in the list.
-  setFromSockaddr(info->ai_addr, info->ai_addrlen);
+  setFromSockaddr(info->ai_addr, socklen_t(info->ai_addrlen));
 }
 
 void SocketAddress::setFromSocket(
@@ -701,9 +707,10 @@ void SocketAddress::updateUnixAddressLength(socklen_t addrlen) {
     // abstract namespace.  honor the specified length
   } else {
     // Call strnlen(), just in case the length was overspecified.
-    socklen_t maxLength = addrlen - offsetof(struct sockaddr_un, sun_path);
+    size_t maxLength = addrlen - offsetof(struct sockaddr_un, sun_path);
     size_t pathLength = strnlen(storage_.un.addr->sun_path, maxLength);
-    storage_.un.len = offsetof(struct sockaddr_un, sun_path) + pathLength;
+    storage_.un.len =
+        socklen_t(offsetof(struct sockaddr_un, sun_path) + pathLength);
   }
 }
 
@@ -718,11 +725,11 @@ bool SocketAddress::operator<(const SocketAddress& other) const {
     //
     // Note that this still meets the requirements for a strict weak
     // ordering, so we can use this operator<() with standard C++ containers.
-    size_t thisPathLength = storage_.un.pathLength();
+    auto thisPathLength = storage_.un.pathLength();
     if (thisPathLength == 0) {
       return false;
     }
-    size_t otherPathLength = other.storage_.un.pathLength();
+    auto otherPathLength = other.storage_.un.pathLength();
     if (otherPathLength == 0) {
       return true;
     }
@@ -731,9 +738,10 @@ bool SocketAddress::operator<(const SocketAddress& other) const {
     if (thisPathLength != otherPathLength) {
       return thisPathLength < otherPathLength;
     }
-    int cmp = memcmp(storage_.un.addr->sun_path,
-                     other.storage_.un.addr->sun_path,
-                     thisPathLength);
+    int cmp = memcmp(
+        storage_.un.addr->sun_path,
+        other.storage_.un.addr->sun_path,
+        size_t(thisPathLength));
     return cmp < 0;
   }
   switch (getFamily()) {

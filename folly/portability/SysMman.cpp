@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -56,7 +56,7 @@ static size_t alignToAllocationGranularity(size_t s) {
 }
 
 extern "C" {
-int madvise(const void* addr, size_t len, int advise) {
+int madvise(const void* /* addr */, size_t /* len */, int /* advise */) {
   // We do nothing at all.
   // Could probably implement dontneed via VirtualAlloc
   // with the MEM_RESET and MEM_RESET_UNDO flags.
@@ -64,10 +64,25 @@ int madvise(const void* addr, size_t len, int advise) {
 }
 
 int mlock(const void* addr, size_t len) {
+  // For some strange reason, it's allowed to
+  // lock a nullptr as long as length is zero.
+  // VirtualLock doesn't allow it, so handle
+  // it specially.
+  if (addr == nullptr && len == 0) {
+    return 0;
+  }
   if (!VirtualLock((void*)addr, len)) {
     return -1;
   }
   return 0;
+}
+
+namespace {
+constexpr uint32_t kMMapLengthMagic = 0xFACEB00C;
+struct MemMapDebugTrailer {
+  size_t length;
+  uint32_t magic;
+};
 }
 
 void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t off) {
@@ -106,10 +121,13 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t off) {
         (DWORD)((length >> 32) & 0xFFFFFFFF),
         (DWORD)(length & 0xFFFFFFFF),
         nullptr);
+    if (fmh == nullptr) {
+      return MAP_FAILED;
+    }
     ret = MapViewOfFileEx(
         fmh,
         accessFlags,
-        (DWORD)((off >> 32) & 0xFFFFFFFF),
+        (DWORD)(0), // off_t is only 32-bit :(
         (DWORD)(off & 0xFFFFFFFF),
         0,
         addr);
@@ -118,12 +136,26 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t off) {
     }
     CloseHandle(fmh);
   } else {
+    auto baseLength = length;
+    if (folly::kIsDebug) {
+      // In debug mode we keep track of the length to make
+      // sure you're only munmapping the entire thing if
+      // we're using VirtualAlloc.
+      length += sizeof(MemMapDebugTrailer);
+    }
+
     // VirtualAlloc rounds size down to a multiple
     // of the system allocation granularity :(
     length = alignToAllocationGranularity(length);
     ret = VirtualAlloc(addr, length, MEM_COMMIT | MEM_RESERVE, newProt);
     if (ret == nullptr) {
       return MAP_FAILED;
+    }
+
+    if (folly::kIsDebug) {
+      auto deb = (MemMapDebugTrailer*)((char*)ret + baseLength);
+      deb->length = baseLength;
+      deb->magic = kMMapLengthMagic;
     }
   }
 
@@ -148,6 +180,10 @@ int mprotect(void* addr, size_t size, int prot) {
 }
 
 int munlock(const void* addr, size_t length) {
+  // See comment in mlock
+  if (addr == nullptr && length == 0) {
+    return 0;
+  }
   if (!VirtualUnlock((void*)addr, length)) {
     return -1;
   }
@@ -163,8 +199,11 @@ int munmap(void* addr, size_t length) {
       // in debug mode.
       MEMORY_BASIC_INFORMATION inf;
       VirtualQuery(addr, &inf, sizeof(inf));
-      assert(inf.BaseAddress == addr);
-      assert(inf.RegionSize == alignToAllocationGranularity(length));
+      assert(inf.AllocationBase == addr);
+
+      auto deb = (MemMapDebugTrailer*)((char*)addr + length);
+      assert(deb->length == length);
+      assert(deb->magic == kMMapLengthMagic);
     }
     if (!VirtualFree(addr, 0, MEM_RELEASE)) {
       return -1;

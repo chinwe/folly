@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,8 +18,9 @@
 
 #include <folly/DynamicConverter.h>
 
+#include <folly/portability/GTest.h>
+
 #include <algorithm>
-#include <gtest/gtest.h>
 #include <map>
 #include <vector>
 
@@ -295,11 +296,11 @@ TEST(DynamicConverter, consts) {
 
   dynamic d3 = true;
   auto i3 = convertTo<const bool>(d3);
-  EXPECT_EQ(true, i3);
+  EXPECT_TRUE(i3);
 
   dynamic d4 = "true";
   auto i4 = convertTo<const bool>(d4);
-  EXPECT_EQ(true, i4);
+  EXPECT_TRUE(i4);
 
   dynamic d5 = dynamic::array(1, 2);
   auto i5 = convertTo<const std::pair<const int, const int>>(d5);
@@ -394,4 +395,17 @@ TEST(DynamicConverter, errors) {
 
   dynamic d2 = floatOver;
   EXPECT_THROW(convertTo<float>(d2), std::range_error);
+}
+
+TEST(DynamicConverter, partial_dynamics) {
+  std::vector<dynamic> c{
+      dynamic::array(2, 3, 4), dynamic::array(3, 4, 5),
+  };
+  dynamic d = dynamic::array(dynamic::array(2, 3, 4), dynamic::array(3, 4, 5));
+  EXPECT_EQ(d, toDynamic(c));
+
+  std::unordered_map<std::string, dynamic> m{{"one", 1}, {"two", 2}};
+
+  dynamic md = dynamic::object("one", 1)("two", 2);
+  EXPECT_EQ(md, toDynamic(m));
 }

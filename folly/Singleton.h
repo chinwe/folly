@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,29 +17,36 @@
 // SingletonVault - a library to manage the creation and destruction
 // of interdependent singletons.
 //
-// Basic usage of this class is very simple; suppose you have a class
+// Recommended usage of this class: suppose you have a class
 // called MyExpensiveService, and you only want to construct one (ie,
 // it's a singleton), but you only want to construct it if it is used.
 //
 // In your .h file:
-// class MyExpensiveService { ... };
+// class MyExpensiveService {
+//   // Caution - may return a null ptr during startup and shutdown.
+//   static std::shared_ptr<MyExpensiveService> getInstance();
+//   ....
+// };
 //
 // In your .cpp file:
-// namespace { folly::Singleton<MyExpensiveService> the_singleton; }
+// namespace { struct PrivateTag {}; }
+// static folly::Singleton<MyExpensiveService, PrivateTag> the_singleton;
+// std::shared_ptr<MyExpensiveService> MyExpensiveService::getInstance() {
+//   return the_singleton.try_get();
+// }
 //
-// Code can access it via:
+// Code in other modules can access it via:
 //
-// MyExpensiveService* instance = Singleton<MyExpensiveService>::get();
-// or
-// std::weak_ptr<MyExpensiveService> instance =
-//     Singleton<MyExpensiveService>::get_weak();
+// auto instance = MyExpensiveService::getInstance();
 //
-// You also can directly access it by the variable defining the
-// singleton rather than via get(), and even treat that variable like
-// a smart pointer (dereferencing it or using the -> operator).
+// Advanced usage and notes:
 //
-// Please note, however, that all non-weak_ptr interfaces are
-// inherently subject to races with destruction.  Use responsibly.
+// You can also access a singleton instance with
+// `Singleton<ObjectType, TagType>::try_get()`. We recommend
+// that you prefer the form `the_singleton.try_get()` because it ensures that
+// `the_singleton` is used and cannot be garbage-collected during linking: this
+// is necessary because the constructor of `the_singleton` is what registers it
+// to the SingletonVault.
 //
 // The singleton will be created on demand.  If the constructor for
 // MyExpensiveService actually makes use of *another* Singleton, then
@@ -48,7 +55,10 @@
 // circular dependency, a runtime error will occur.
 //
 // You can have multiple singletons of the same underlying type, but
-// each must be given a unique tag. If no tag is specified - default tag is used
+// each must be given a unique tag. If no tag is specified a default tag is
+// used. We recommend that you use a tag from an anonymous namespace private to
+// your implementation file, as this ensures that the singleton is only
+// available via your interface and not also through Singleton<T>::try_get()
 //
 // namespace {
 // struct Tag1 {};
@@ -70,6 +80,15 @@
 //
 // Where create and destroy are functions, Singleton<T>::CreateFunc
 // Singleton<T>::TeardownFunc.
+//
+// For example, if you need to pass arguments to your class's constructor:
+//   class X {
+//    public:
+//      X(int a1, std::string a2);
+//    // ...
+//   }
+// Make your singleton like this:
+//   folly::Singleton<X> singleton_x([]() { return new X(42, "foo"); });
 //
 // The above examples detail a situation where an expensive singleton is loaded
 // on-demand (thus only if needed).  However if there is an expensive singleton
@@ -103,14 +122,15 @@
 
 #pragma once
 #include <folly/Baton.h>
+#include <folly/Demangle.h>
 #include <folly/Exception.h>
+#include <folly/Executor.h>
 #include <folly/Hash.h>
 #include <folly/Memory.h>
 #include <folly/RWSpinLock.h>
-#include <folly/Demangle.h>
-#include <folly/Executor.h>
-#include <folly/experimental/ReadMostlySharedPtr.h>
+#include <folly/Synchronized.h>
 #include <folly/detail/StaticSingletonManager.h>
+#include <folly/experimental/ReadMostlySharedPtr.h>
 
 #include <algorithm>
 #include <atomic>
@@ -338,7 +358,9 @@ class SingletonVault {
     }
   };
 
-  explicit SingletonVault(Type type = Type::Relaxed) : type_(type) {}
+  static Type defaultVaultType();
+
+  explicit SingletonVault(Type type = defaultVaultType()) : type_(type) {}
 
   // Destructor is only called by unit tests to check destroyInstances.
   ~SingletonVault();
@@ -400,9 +422,7 @@ class SingletonVault {
 
   // For testing; how many registered and living singletons we have.
   size_t registeredSingletonCount() const {
-    RWSpinLock::ReadHolder rh(&mutex_);
-
-    return singletons_.size();
+    return singletons_.rlock()->size();
   }
 
   /**
@@ -412,10 +432,10 @@ class SingletonVault {
   bool eagerInitComplete() const;
 
   size_t livingSingletonCount() const {
-    RWSpinLock::ReadHolder rh(&mutex_);
+    auto singletons = singletons_.rlock();
 
     size_t ret = 0;
-    for (const auto& p : singletons_) {
+    for (const auto& p : *singletons) {
       if (p.second->hasLiveInstance()) {
         ++ret;
       }
@@ -434,7 +454,7 @@ class SingletonVault {
   // tests only.
   template <typename VaultTag = detail::DefaultTag>
   static SingletonVault* singleton() {
-    static SingletonVault* vault =
+    /* library-local */ static auto vault =
         detail::createGlobal<SingletonVault, VaultTag>();
     return vault;
   }
@@ -442,10 +462,13 @@ class SingletonVault {
   typedef std::string(*StackTraceGetterPtr)();
 
   static std::atomic<StackTraceGetterPtr>& stackTraceGetter() {
-    static std::atomic<StackTraceGetterPtr>* stackTraceGetterPtr =
-        detail::createGlobal<std::atomic<StackTraceGetterPtr>,
-                             SingletonVault>();
+    /* library-local */ static auto stackTraceGetterPtr = detail::
+        createGlobal<std::atomic<StackTraceGetterPtr>, SingletonVault>();
     return *stackTraceGetterPtr;
+  }
+
+  void setType(Type type) {
+    type_ = type;
   }
 
  private:
@@ -458,13 +481,20 @@ class SingletonVault {
     Quiescing,
   };
 
+  struct State {
+    SingletonVaultState state{SingletonVaultState::Running};
+    bool registrationComplete{false};
+  };
+
   // Each singleton in the vault can be in two states: dead
   // (registered but never created), living (CreateFunc returned an instance).
 
-  void stateCheck(SingletonVaultState expected,
-                  const char* msg="Unexpected singleton state change") {
-    if (expected != state_) {
-        throw std::logic_error(msg);
+  static void stateCheck(
+      SingletonVaultState expected,
+      const State& state,
+      const char* msg = "Unexpected singleton state change") {
+    if (expected != state.state) {
+      throw std::logic_error(msg);
     }
   }
 
@@ -484,15 +514,17 @@ class SingletonVault {
   typedef std::unordered_map<detail::TypeDescriptor,
                              detail::SingletonHolderBase*,
                              detail::TypeDescriptorHasher> SingletonMap;
+  folly::Synchronized<SingletonMap> singletons_;
+  folly::Synchronized<std::unordered_set<detail::SingletonHolderBase*>>
+      eagerInitSingletons_;
+  folly::Synchronized<std::vector<detail::TypeDescriptor>> creationOrder_;
 
-  mutable folly::RWSpinLock mutex_;
-  SingletonMap singletons_;
-  std::unordered_set<detail::SingletonHolderBase*> eagerInitSingletons_;
-  std::vector<detail::TypeDescriptor> creation_order_;
-  SingletonVaultState state_{SingletonVaultState::Running};
-  bool registrationComplete_{false};
-  folly::RWSpinLock stateMutex_;
-  Type type_{Type::Relaxed};
+  // Using SharedMutexReadPriority is important here, because we want to make
+  // sure we don't block nested singleton creation happening concurrently with
+  // destroyInstances().
+  folly::Synchronized<State, folly::SharedMutexReadPriority> state_;
+
+  Type type_;
 };
 
 // This is the wrapper class that most users actually interact with.
@@ -653,7 +685,7 @@ class LeakySingleton {
   };
 
   static Entry& entryInstance() {
-    static auto entry = detail::createGlobal<Entry, Tag>();
+    /* library-local */ static auto entry = detail::createGlobal<Entry, Tag>();
     return *entry;
   }
 

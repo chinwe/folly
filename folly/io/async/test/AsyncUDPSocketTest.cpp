@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,13 +20,10 @@
 #include <folly/io/async/EventBase.h>
 #include <folly/SocketAddress.h>
 
-#include <boost/thread/barrier.hpp>
-
 #include <folly/io/IOBuf.h>
+#include <folly/portability/GTest.h>
 
 #include <thread>
-
-#include <gtest/gtest.h>
 
 using folly::AsyncUDPSocket;
 using folly::AsyncUDPServerSocket;
@@ -111,11 +108,7 @@ class UDPServer {
         evb.loopForever();
       });
 
-      auto r = std::make_shared<boost::barrier>(2);
-      evb.runInEventBaseThread([r] () {
-        r->wait();
-      });
-      r->wait();
+      evb.waitUntilRunning();
 
       socket_->addListener(&evb, &acceptors_[i]);
       threads_.emplace_back(std::move(t));
@@ -256,7 +249,6 @@ class UDPClient
 TEST(AsyncSocketTest, PingPong) {
   folly::EventBase sevb;
   UDPServer server(&sevb, folly::SocketAddress("127.0.0.1", 0), 4);
-  boost::barrier barrier(2);
 
   // Start event loop in a separate thread
   auto serverThread = std::thread([&sevb] () {
@@ -264,12 +256,10 @@ TEST(AsyncSocketTest, PingPong) {
   });
 
   // Wait for event loop to start
-  sevb.runInEventBaseThread([&] () { barrier.wait(); });
-  barrier.wait();
+  sevb.waitUntilRunning();
 
   // Start the server
-  sevb.runInEventBaseThread([&] () { server.start(); barrier.wait(); });
-  barrier.wait();
+  sevb.runInEventBaseThreadAndWait([&]() { server.start(); });
 
   folly::EventBase cevb;
   UDPClient client(&cevb);
@@ -280,8 +270,7 @@ TEST(AsyncSocketTest, PingPong) {
   });
 
   // Wait for event loop to start
-  cevb.runInEventBaseThread([&] () { barrier.wait(); });
-  barrier.wait();
+  cevb.waitUntilRunning();
 
   // Send ping
   cevb.runInEventBaseThread([&] () { client.start(server.address(), 1000); });

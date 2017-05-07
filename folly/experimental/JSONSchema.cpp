@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -219,7 +219,7 @@ struct SizeValidator final : IValidator {
     if (value.type() != type_) {
       return none;
     }
-    if (!Comparison()(length_, value.size())) {
+    if (!Comparison()(length_, int64_t(value.size()))) {
       return makeError("different length string/array/object", value);
     }
     return none;
@@ -616,7 +616,7 @@ struct AnyOfValidator final : IValidator {
         errors.emplace_back(*se);
       }
     }
-    const int success = validators_.size() - errors.size();
+    const auto success = validators_.size() - errors.size();
     if (success == 0) {
       return makeError("at least one valid schema", value);
     } else if (success > 1 && type_ == Type::EXACTLY_ONE) {
@@ -691,7 +691,7 @@ void SchemaValidator::loadSchema(SchemaValidatorContext& context,
               s = s->get_ptr(pos);
               continue;
             }
-          } catch (const std::range_error& e) {
+          } catch (const std::range_error&) {
             // ignore
           }
         }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@ template <class KeyT, class ValueT, class HashFcn, class EqualFcn,
 AtomicHashArray<KeyT, ValueT, HashFcn, EqualFcn,
                 Allocator, ProbeFcn, KeyConvertFcn>::
 AtomicHashArray(size_t capacity, KeyT emptyKey, KeyT lockedKey,
-                KeyT erasedKey, double _maxLoadFactor, size_t cacheSize)
+                KeyT erasedKey, double _maxLoadFactor, uint32_t cacheSize)
     : capacity_(capacity),
       maxEntries_(size_t(_maxLoadFactor * capacity_ + 0.5)),
       kEmptyKey_(emptyKey), kLockedKey_(lockedKey), kErasedKey_(erasedKey),

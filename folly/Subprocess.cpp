@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,8 @@
 
 #if __linux__
 #include <sys/prctl.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 #endif
 #include <fcntl.h>
 
@@ -34,13 +36,15 @@
 
 #include <glog/logging.h>
 
+#include <folly/Assume.h>
 #include <folly/Conv.h>
 #include <folly/Exception.h>
 #include <folly/ScopeGuard.h>
+#include <folly/Shell.h>
 #include <folly/String.h>
 #include <folly/io/Cursor.h>
-#include <folly/portability/Environment.h>
 #include <folly/portability/Sockets.h>
+#include <folly/portability/Stdlib.h>
 #include <folly/portability/Unistd.h>
 
 constexpr int kExecFailure = 127;
@@ -105,8 +109,7 @@ std::string ProcessReturnCode::str() const {
     return to<std::string>("killed by signal ", killSignal(),
                            (coreDumped() ? " (core dumped)" : ""));
   }
-  CHECK(false);  // unreached
-  return "";  // silence GCC warning
+  assume_unreachable();
 }
 
 CalledProcessError::CalledProcessError(ProcessReturnCode rc)
@@ -182,17 +185,9 @@ Subprocess::Subprocess(
   if (options.usePath_) {
     throw std::invalid_argument("usePath() not allowed when running in shell");
   }
-  const char* shell = getenv("SHELL");
-  if (!shell) {
-    shell = "/bin/sh";
-  }
 
-  std::unique_ptr<const char*[]> argv(new const char*[4]);
-  argv[0] = shell;
-  argv[1] = "-c";
-  argv[2] = cmd.c_str();
-  argv[3] = nullptr;
-  spawn(std::move(argv), shell, options, env);
+  std::vector<std::string> argv = {"/bin/sh", "-c", cmd};
+  spawn(cloneStrings(argv), argv[0].c_str(), options, env);
 }
 
 Subprocess::~Subprocess() {
@@ -396,7 +391,19 @@ void Subprocess::spawnInternal(
   // Call c_str() here, as it's not necessarily safe after fork.
   const char* childDir =
     options.childDir_.empty() ? nullptr : options.childDir_.c_str();
-  pid_t pid = vfork();
+
+  pid_t pid;
+#ifdef __linux__
+  if (options.cloneFlags_) {
+    pid = syscall(SYS_clone, *options.cloneFlags_, 0, nullptr, nullptr);
+    checkUnixError(pid, errno, "clone");
+  } else {
+#endif
+    pid = vfork();
+    checkUnixError(pid, errno, "vfork");
+#ifdef __linux__
+  }
+#endif
   if (pid == 0) {
     int errnoValue = prepareChild(options, &oldSignals, childDir);
     if (errnoValue != 0) {
@@ -407,8 +414,6 @@ void Subprocess::spawnInternal(
     // If we get here, exec() failed.
     childError(errFd, kExecFailure, errnoValue);
   }
-  // In parent.  Make sure vfork() succeeded.
-  checkUnixError(pid, errno, "vfork");
 
   // Child is alive.  We have to be very careful about throwing after this
   // point.  We are inside the constructor, so if we throw the Subprocess

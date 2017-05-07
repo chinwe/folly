@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,9 +23,8 @@
 #include <folly/io/async/DelayedDestruction.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/ssl/OpenSSLPtrTypes.h>
+#include <folly/portability/OpenSSL.h>
 #include <folly/portability/SysUio.h>
-
-#include <openssl/ssl.h>
 
 constexpr bool kOpenSslModeMoveBufferOwnership =
 #ifdef SSL_MODE_MOVE_BUFFER_OWNERSHIP
@@ -72,11 +71,27 @@ inline WriteFlags operator|(WriteFlags a, WriteFlags b) {
 }
 
 /*
+ * compound assignment union operator
+ */
+inline WriteFlags& operator|=(WriteFlags& a, WriteFlags b) {
+  a = a | b;
+  return a;
+}
+
+/*
  * intersection operator
  */
 inline WriteFlags operator&(WriteFlags a, WriteFlags b) {
   return static_cast<WriteFlags>(
     static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
+}
+
+/*
+ * compound assignment intersection operator
+ */
+inline WriteFlags& operator&=(WriteFlags& a, WriteFlags b) {
+  a = a & b;
+  return a;
 }
 
 /*
@@ -306,6 +321,20 @@ class AsyncTransport : public DelayedDestruction, public AsyncSocketBase {
    */
   virtual void getLocalAddress(SocketAddress* address) const = 0;
 
+  /**
+   * Get the address of the remote endpoint to which this transport is
+   * connected.
+   *
+   * This function may throw AsyncSocketException on error.
+   *
+   * @return         Return the local address
+   */
+  SocketAddress getLocalAddress() const {
+    SocketAddress addr;
+    getLocalAddress(&addr);
+    return addr;
+  }
+
   virtual void getAddress(SocketAddress* address) const {
     getLocalAddress(address);
   }
@@ -320,6 +349,20 @@ class AsyncTransport : public DelayedDestruction, public AsyncSocketBase {
    *                 specified SocketAddress.
    */
   virtual void getPeerAddress(SocketAddress* address) const = 0;
+
+  /**
+   * Get the address of the remote endpoint to which this transport is
+   * connected.
+   *
+   * This function may throw AsyncSocketException on error.
+   *
+   * @return         Return the remote endpoint's address
+   */
+  SocketAddress getPeerAddress() const {
+    SocketAddress addr;
+    getPeerAddress(&addr);
+    return addr;
+  }
 
   /**
    * Get the certificate used to authenticate the peer.
@@ -493,7 +536,7 @@ class AsyncReader {
      */
 
     virtual void readBufferAvailable(std::unique_ptr<IOBuf> /*readBuf*/)
-      noexcept {};
+      noexcept {}
 
     /**
      * readEOF() will be invoked when the transport is closed.

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 
 #include <folly/ExceptionWrapper.h>
 #include <folly/SocketAddress.h>
+#include <folly/experimental/TestUtil.h>
 #include <folly/io/async/AsyncSSLSocket.h>
 #include <folly/io/async/AsyncServerSocket.h>
 #include <folly/io/async/AsyncSocket.h>
@@ -27,11 +28,12 @@
 #include <folly/io/async/AsyncTransport.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/ssl/SSLErrors.h>
+#include <folly/io/async/test/TestSSLServer.h>
+#include <folly/portability/GTest.h>
 #include <folly/portability/Sockets.h>
 #include <folly/portability/Unistd.h>
 
 #include <fcntl.h>
-#include <gtest/gtest.h>
 #include <sys/types.h>
 #include <condition_variable>
 #include <iostream>
@@ -39,57 +41,241 @@
 
 namespace folly {
 
-enum StateEnum {
-  STATE_WAITING,
-  STATE_SUCCEEDED,
-  STATE_FAILED
-};
-
 // The destructors of all callback classes assert that the state is
 // STATE_SUCCEEDED, for both possitive and negative tests. The tests
 // are responsible for setting the succeeded state properly before the
 // destructors are called.
 
+class SendMsgParamsCallbackBase :
+      public folly::AsyncSocket::SendMsgParamsCallback {
+ public:
+  SendMsgParamsCallbackBase() {}
+
+  void setSocket(
+    const std::shared_ptr<AsyncSSLSocket> &socket) {
+    socket_ = socket;
+    oldCallback_ = socket_->getSendMsgParamsCB();
+    socket_->setSendMsgParamCB(this);
+  }
+
+  int getFlagsImpl(folly::WriteFlags flags, int /*defaultFlags*/) noexcept
+                                                                     override {
+    return oldCallback_->getFlags(flags);
+  }
+
+  void getAncillaryData(folly::WriteFlags flags, void* data) noexcept override {
+    oldCallback_->getAncillaryData(flags, data);
+  }
+
+  uint32_t getAncillaryDataSize(folly::WriteFlags flags) noexcept override {
+    return oldCallback_->getAncillaryDataSize(flags);
+  }
+
+  std::shared_ptr<AsyncSSLSocket> socket_;
+  folly::AsyncSocket::SendMsgParamsCallback* oldCallback_{nullptr};
+};
+
+class SendMsgFlagsCallback : public SendMsgParamsCallbackBase {
+ public:
+  SendMsgFlagsCallback() {}
+
+  void resetFlags(int flags) {
+    flags_ = flags;
+  }
+
+  int getFlagsImpl(folly::WriteFlags flags, int /*defaultFlags*/) noexcept
+                                                                  override {
+    if (flags_) {
+      return flags_;
+    } else {
+      return oldCallback_->getFlags(flags);
+    }
+  }
+
+  int flags_{0};
+};
+
+class SendMsgDataCallback : public SendMsgFlagsCallback {
+ public:
+  SendMsgDataCallback() {}
+
+  void resetData(std::vector<char>&& data) {
+    ancillaryData_.swap(data);
+  }
+
+  void getAncillaryData(folly::WriteFlags flags, void* data) noexcept override {
+    if (ancillaryData_.size()) {
+      std::cerr << "getAncillaryData: copying data" << std::endl;
+      memcpy(data, ancillaryData_.data(), ancillaryData_.size());
+    } else {
+      oldCallback_->getAncillaryData(flags, data);
+    }
+  }
+
+  uint32_t getAncillaryDataSize(folly::WriteFlags flags) noexcept override {
+    if (ancillaryData_.size()) {
+      std::cerr << "getAncillaryDataSize: returning size" << std::endl;
+      return ancillaryData_.size();
+    } else {
+      return oldCallback_->getAncillaryDataSize(flags);
+    }
+  }
+
+  std::vector<char> ancillaryData_;
+};
+
 class WriteCallbackBase :
 public AsyncTransportWrapper::WriteCallback {
 public:
-  WriteCallbackBase()
+  explicit WriteCallbackBase(SendMsgParamsCallbackBase* mcb = nullptr)
       : state(STATE_WAITING)
       , bytesWritten(0)
-      , exception(AsyncSocketException::UNKNOWN, "none") {}
+      , exception(AsyncSocketException::UNKNOWN, "none")
+      , mcb_(mcb) {}
 
   ~WriteCallbackBase() {
     EXPECT_EQ(STATE_SUCCEEDED, state);
   }
 
-  void setSocket(
+  virtual void setSocket(
     const std::shared_ptr<AsyncSSLSocket> &socket) {
     socket_ = socket;
+    if (mcb_) {
+      mcb_->setSocket(socket);
+    }
   }
 
-  void writeSuccess() noexcept override {
+  virtual void writeSuccess() noexcept override {
     std::cerr << "writeSuccess" << std::endl;
     state = STATE_SUCCEEDED;
   }
 
   void writeErr(
-    size_t bytesWritten,
+    size_t nBytesWritten,
     const AsyncSocketException& ex) noexcept override {
-    std::cerr << "writeError: bytesWritten " << bytesWritten
+    std::cerr << "writeError: bytesWritten " << nBytesWritten
          << ", exception " << ex.what() << std::endl;
 
     state = STATE_FAILED;
-    this->bytesWritten = bytesWritten;
+    this->bytesWritten = nBytesWritten;
     exception = ex;
     socket_->close();
-    socket_->detachEventBase();
   }
 
   std::shared_ptr<AsyncSSLSocket> socket_;
   StateEnum state;
   size_t bytesWritten;
   AsyncSocketException exception;
+  SendMsgParamsCallbackBase* mcb_;
 };
+
+class ExpectWriteErrorCallback :
+public WriteCallbackBase {
+public:
+  explicit ExpectWriteErrorCallback(SendMsgParamsCallbackBase* mcb = nullptr)
+      : WriteCallbackBase(mcb) {}
+
+  ~ExpectWriteErrorCallback() {
+    EXPECT_EQ(STATE_FAILED, state);
+    EXPECT_EQ(exception.type_,
+             AsyncSocketException::AsyncSocketExceptionType::NETWORK_ERROR);
+    EXPECT_EQ(exception.errno_, 22);
+    // Suppress the assert in  ~WriteCallbackBase()
+    state = STATE_SUCCEEDED;
+  }
+};
+
+#ifdef MSG_ERRQUEUE
+/* copied from include/uapi/linux/net_tstamp.h */
+/* SO_TIMESTAMPING gets an integer bit field comprised of these values */
+enum SOF_TIMESTAMPING {
+  SOF_TIMESTAMPING_TX_SOFTWARE = (1 << 1),
+  SOF_TIMESTAMPING_SOFTWARE = (1 << 4),
+  SOF_TIMESTAMPING_OPT_ID = (1 << 7),
+  SOF_TIMESTAMPING_TX_SCHED = (1 << 8),
+  SOF_TIMESTAMPING_TX_ACK = (1 << 9),
+  SOF_TIMESTAMPING_OPT_TSONLY = (1 << 11),
+};
+
+class WriteCheckTimestampCallback :
+ public WriteCallbackBase {
+public:
+  explicit WriteCheckTimestampCallback(SendMsgParamsCallbackBase* mcb = nullptr)
+    : WriteCallbackBase(mcb) {}
+
+  ~WriteCheckTimestampCallback() {
+    EXPECT_EQ(STATE_SUCCEEDED, state);
+    EXPECT_TRUE(gotTimestamp_);
+    EXPECT_TRUE(gotByteSeq_);
+  }
+
+  void setSocket(
+    const std::shared_ptr<AsyncSSLSocket> &socket) override {
+    WriteCallbackBase::setSocket(socket);
+
+    EXPECT_NE(socket_->getFd(), 0);
+    int flags = SOF_TIMESTAMPING_OPT_ID
+                | SOF_TIMESTAMPING_OPT_TSONLY
+                | SOF_TIMESTAMPING_SOFTWARE;
+    AsyncSocket::OptionKey tstampingOpt = {SOL_SOCKET, SO_TIMESTAMPING};
+    int ret = tstampingOpt.apply(socket_->getFd(), flags);
+    EXPECT_EQ(ret, 0);
+  }
+
+  void checkForTimestampNotifications() noexcept {
+    int fd = socket_->getFd();
+    std::vector<char> ctrl(1024, 0);
+    unsigned char data;
+    struct msghdr msg;
+    iovec entry;
+
+    memset(&msg, 0, sizeof(msg));
+    entry.iov_base = &data;
+    entry.iov_len = sizeof(data);
+    msg.msg_iov = &entry;
+    msg.msg_iovlen = 1;
+    msg.msg_control = ctrl.data();
+    msg.msg_controllen = ctrl.size();
+
+    int ret;
+    while (true) {
+      ret = recvmsg(fd, &msg, MSG_ERRQUEUE);
+      if (ret < 0) {
+        if (errno != EAGAIN) {
+          auto errnoCopy = errno;
+          std::cerr << "::recvmsg exited with code " << ret
+                    << ", errno: " << errnoCopy << std::endl;
+          AsyncSocketException ex(
+            AsyncSocketException::INTERNAL_ERROR,
+            "recvmsg() failed",
+            errnoCopy);
+          exception = ex;
+        }
+        return;
+      }
+
+      for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg);
+           cmsg != nullptr && cmsg->cmsg_len != 0;
+           cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+        if (cmsg->cmsg_level == SOL_SOCKET &&
+            cmsg->cmsg_type == SCM_TIMESTAMPING) {
+          gotTimestamp_ = true;
+          continue;
+        }
+
+        if ((cmsg->cmsg_level == SOL_IP && cmsg->cmsg_type == IP_RECVERR) ||
+            (cmsg->cmsg_level == SOL_IPV6 && cmsg->cmsg_type == IPV6_RECVERR)) {
+          gotByteSeq_ = true;
+          continue;
+        }
+      }
+    }
+  }
+
+  bool gotTimestamp_{false};
+  bool gotByteSeq_{false};
+};
+#endif // MSG_ERRQUEUE
 
 class ReadCallbackBase :
 public AsyncTransportWrapper::ReadCallback {
@@ -118,14 +304,12 @@ public AsyncTransportWrapper::ReadCallback {
     std::cerr << "readError " << ex.what() << std::endl;
     state = STATE_FAILED;
     socket_->close();
-    socket_->detachEventBase();
   }
 
   void readEOF() noexcept override {
     std::cerr << "readEOF" << std::endl;
 
     socket_->close();
-    socket_->detachEventBase();
   }
 
   std::shared_ptr<AsyncSSLSocket> socket_;
@@ -180,10 +364,10 @@ public:
       buffer = nullptr;
       length = 0;
     }
-    void allocate(size_t length) {
+    void allocate(size_t len) {
       assert(buffer == nullptr);
-      this->buffer = static_cast<char*>(malloc(length));
-      this->length = length;
+      this->buffer = static_cast<char*>(malloc(len));
+      this->length = len;
     }
     void free() {
       ::free(buffer);
@@ -259,7 +443,9 @@ public:
     wcb_->setSocket(socket_);
 
     // Write back the same data.
-    socket_->write(wcb_, currentBuffer.buffer, len);
+    folly::test::msvcSuppressAbortOnInvalidParams([&] {
+      socket_->write(wcb_, currentBuffer.buffer, len);
+    });
 
     if (wcb_->state == STATE_FAILED) {
       setState(STATE_SUCCEEDED);
@@ -285,15 +471,16 @@ public:
   void readErr(const AsyncSocketException& ex) noexcept override {
     std::cerr << "readError " << ex.what() << std::endl;
     state = STATE_FAILED;
-    tcpSocket_->close();
-    tcpSocket_->detachEventBase();
+    if (tcpSocket_) {
+      tcpSocket_->close();
+    }
   }
 
   void readEOF() noexcept override {
     std::cerr << "readEOF" << std::endl;
-
-    tcpSocket_->close();
-    tcpSocket_->detachEventBase();
+    if (tcpSocket_) {
+      tcpSocket_->close();
+    }
     state = STATE_SUCCEEDED;
   }
 
@@ -374,50 +561,6 @@ public:
   std::string errorString_;
 };
 
-class SSLServerAcceptCallbackBase:
-public folly::AsyncServerSocket::AcceptCallback {
-public:
-  explicit SSLServerAcceptCallbackBase(HandshakeCallback *hcb):
-  state(STATE_WAITING), hcb_(hcb) {}
-
-  ~SSLServerAcceptCallbackBase() {
-    EXPECT_EQ(STATE_SUCCEEDED, state);
-  }
-
-  void acceptError(const std::exception& ex) noexcept override {
-    std::cerr << "SSLServerAcceptCallbackBase::acceptError "
-              << ex.what() << std::endl;
-    state = STATE_FAILED;
-  }
-
-  void connectionAccepted(
-      int fd, const folly::SocketAddress& /* clientAddr */) noexcept override {
-    printf("Connection accepted\n");
-    std::shared_ptr<AsyncSSLSocket> sslSock;
-    try {
-      // Create a AsyncSSLSocket object with the fd. The socket should be
-      // added to the event base and in the state of accepting SSL connection.
-      sslSock = AsyncSSLSocket::newSocket(ctx_, base_, fd);
-    } catch (const std::exception &e) {
-      LOG(ERROR) << "Exception %s caught while creating a AsyncSSLSocket "
-        "object with socket " << e.what() << fd;
-      ::close(fd);
-      acceptError(e);
-      return;
-    }
-
-    connAccepted(sslSock);
-  }
-
-  virtual void connAccepted(
-    const std::shared_ptr<folly::AsyncSSLSocket> &s) = 0;
-
-  StateEnum state;
-  HandshakeCallback *hcb_;
-  std::shared_ptr<folly::SSLContext> ctx_;
-  folly::EventBase* base_;
-};
-
 class SSLServerAcceptCallback: public SSLServerAcceptCallbackBase {
 public:
   uint32_t timeout_;
@@ -443,7 +586,7 @@ public:
     std::cerr << "SSLServerAcceptCallback::connAccepted" << std::endl;
 
     hcb_->setSocket(sock);
-    sock->sslAccept(hcb_, timeout_);
+    sock->sslAccept(hcb_, std::chrono::milliseconds(timeout_));
     EXPECT_EQ(sock->getSSLState(),
                       AsyncSSLSocket::STATE_ACCEPTING);
 
@@ -507,7 +650,7 @@ public:
     std::cerr << "SSLServerAcceptCallback::connAccepted" << std::endl;
 
     hcb_->setSocket(sock);
-    sock->sslAccept(hcb_, timeout_);
+    sock->sslAccept(hcb_, std::chrono::milliseconds(timeout_));
     ASSERT_TRUE((sock->getSSLState() ==
                  AsyncSSLSocket::STATE_ACCEPTING) ||
                 (sock->getSSLState() ==
@@ -547,8 +690,6 @@ public:
     // Both callbacks should be in the error state.
     EXPECT_EQ(hcb_->state, STATE_FAILED);
     EXPECT_EQ(callback2.state, STATE_FAILED);
-
-    sock->detachEventBase();
 
     state = STATE_SUCCEEDED;
     hcb_->setState(STATE_SUCCEEDED);
@@ -608,53 +749,16 @@ class ConnectTimeoutCallback : public SSLServerAcceptCallbackBase {
   }
 };
 
-class TestSSLServer {
- protected:
-  EventBase evb_;
-  std::shared_ptr<folly::SSLContext> ctx_;
-  SSLServerAcceptCallbackBase *acb_;
-  std::shared_ptr<folly::AsyncServerSocket> socket_;
-  folly::SocketAddress address_;
-  pthread_t thread_;
-
-  static void *Main(void *ctx) {
-    TestSSLServer *self = static_cast<TestSSLServer*>(ctx);
-    self->evb_.loop();
-    std::cerr << "Server thread exited event loop" << std::endl;
-    return nullptr;
-  }
-
- public:
-  // Create a TestSSLServer.
-  // This immediately starts listening on the given port.
-  explicit TestSSLServer(
-      SSLServerAcceptCallbackBase* acb,
-      bool enableTFO = false);
-
-  // Kill the thread.
-  ~TestSSLServer() {
-    evb_.runInEventBaseThread([&](){
-      socket_->stopAccepting();
-    });
-    std::cerr << "Waiting for server thread to exit" << std::endl;
-    pthread_join(thread_, nullptr);
-  }
-
-  EventBase &getEventBase() { return evb_; }
-
-  const folly::SocketAddress& getAddress() const {
-    return address_;
-  }
-};
-
 class TestSSLAsyncCacheServer : public TestSSLServer {
  public:
   explicit TestSSLAsyncCacheServer(SSLServerAcceptCallbackBase *acb,
         int lookupDelay = 100) :
       TestSSLServer(acb) {
     SSL_CTX *sslCtx = ctx_->getSSLCtx();
+#ifdef SSL_ERROR_WANT_SESS_CACHE_LOOKUP
     SSL_CTX_sess_set_get_cb(sslCtx,
                             TestSSLAsyncCacheServer::getSessionCallback);
+#endif
     SSL_CTX_set_session_cache_mode(
       sslCtx, SSL_SESS_CACHE_NO_INTERNAL | SSL_SESS_CACHE_SERVER);
     asyncCallbacks_ = 0;
@@ -676,6 +780,7 @@ class TestSSLAsyncCacheServer : public TestSSLServer {
                                          int* copyflag) {
     *copyflag = 0;
     asyncCallbacks_++;
+    (void)ssl;
 #ifdef SSL_ERROR_WANT_SESS_CACHE_LOOKUP
     if (!SSL_want_sess_cache_lookup(ssl)) {
       // libssl.so mismatch
@@ -741,7 +846,7 @@ class BlockingWriteClient :
       }
     }
 
-    socket_->sslConn(this, 100);
+    socket_->sslConn(this, std::chrono::milliseconds(100));
   }
 
   struct iovec* getIovec() const {
@@ -787,7 +892,7 @@ class BlockingWriteServer :
       bufSize_(2500 * 2000),
       bytesRead_(0) {
     buf_.reset(new uint8_t[bufSize_]);
-    socket_->sslAccept(this, 100);
+    socket_->sslAccept(this, std::chrono::milliseconds(100));
   }
 
   void checkBuffer(struct iovec* iov, uint32_t count) const {
@@ -1286,7 +1391,7 @@ class SSLHandshakeClient : public SSLHandshakeBase {
    bool preverifyResult,
    bool verifyResult) :
     SSLHandshakeBase(std::move(socket), preverifyResult, verifyResult) {
-    socket_->sslConn(this, 0);
+    socket_->sslConn(this, std::chrono::milliseconds::zero());
   }
 };
 
@@ -1297,8 +1402,10 @@ class SSLHandshakeClientNoVerify : public SSLHandshakeBase {
    bool preverifyResult,
    bool verifyResult) :
     SSLHandshakeBase(std::move(socket), preverifyResult, verifyResult) {
-    socket_->sslConn(this, 0,
-      folly::SSLContext::SSLVerifyPeerEnum::NO_VERIFY);
+    socket_->sslConn(
+        this,
+        std::chrono::milliseconds::zero(),
+        folly::SSLContext::SSLVerifyPeerEnum::NO_VERIFY);
   }
 };
 
@@ -1309,8 +1416,10 @@ class SSLHandshakeClientDoVerify : public SSLHandshakeBase {
    bool preverifyResult,
    bool verifyResult) :
     SSLHandshakeBase(std::move(socket), preverifyResult, verifyResult) {
-    socket_->sslConn(this, 0,
-      folly::SSLContext::SSLVerifyPeerEnum::VERIFY);
+    socket_->sslConn(
+        this,
+        std::chrono::milliseconds::zero(),
+        folly::SSLContext::SSLVerifyPeerEnum::VERIFY);
   }
 };
 
@@ -1321,7 +1430,7 @@ class SSLHandshakeServer : public SSLHandshakeBase {
       bool preverifyResult,
       bool verifyResult)
     : SSLHandshakeBase(std::move(socket), preverifyResult, verifyResult) {
-    socket_->sslAccept(this, 0);
+    socket_->sslAccept(this, std::chrono::milliseconds::zero());
   }
 };
 
@@ -1333,7 +1442,7 @@ class SSLHandshakeServerParseClientHello : public SSLHandshakeBase {
       bool verifyResult)
       : SSLHandshakeBase(std::move(socket), preverifyResult, verifyResult) {
     socket_->enableClientHelloParsing();
-    socket_->sslAccept(this, 0);
+    socket_->sslAccept(this, std::chrono::milliseconds::zero());
   }
 
   std::string clientCiphers_, sharedCiphers_, serverCiphers_, chosenCipher_;
@@ -1356,8 +1465,10 @@ class SSLHandshakeServerNoVerify : public SSLHandshakeBase {
       bool preverifyResult,
       bool verifyResult)
     : SSLHandshakeBase(std::move(socket), preverifyResult, verifyResult) {
-    socket_->sslAccept(this, 0,
-      folly::SSLContext::SSLVerifyPeerEnum::NO_VERIFY);
+    socket_->sslAccept(
+        this,
+        std::chrono::milliseconds::zero(),
+        folly::SSLContext::SSLVerifyPeerEnum::NO_VERIFY);
   }
 };
 
@@ -1368,8 +1479,10 @@ class SSLHandshakeServerDoVerify : public SSLHandshakeBase {
       bool preverifyResult,
       bool verifyResult)
     : SSLHandshakeBase(std::move(socket), preverifyResult, verifyResult) {
-    socket_->sslAccept(this, 0,
-      folly::SSLContext::SSLVerifyPeerEnum::VERIFY_REQ_CLIENT_CERT);
+    socket_->sslAccept(
+        this,
+        std::chrono::milliseconds::zero(),
+        folly::SSLContext::SSLVerifyPeerEnum::VERIFY_REQ_CLIENT_CERT);
   }
 };
 

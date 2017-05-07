@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,20 @@
 
 /* These definitions are in a separate file so that they
  * may be included from C- as well as C++-based projects. */
+
+/**
+ * Portable version check.
+ */
+#ifndef __GNUC_PREREQ
+# if defined __GNUC__ && defined __GNUC_MINOR__
+/* nolint */
+#  define __GNUC_PREREQ(maj, min) ((__GNUC__ << 16) + __GNUC_MINOR__ >= \
+                                   ((maj) << 16) + (min))
+# else
+/* nolint */
+#  define __GNUC_PREREQ(maj, min) 0
+# endif
+#endif
 
 /* Define a convenience macro to test when address sanitizer is being used
  * across the different compilers (e.g. clang, gcc) */
@@ -76,7 +90,48 @@
  * used as folly whitelists some functions.
  */
 #if UNDEFINED_SANITIZER
-# define UBSAN_DISABLE(x) __attribute__((no_sanitize(x)))
+#define FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER(...) \
+  __attribute__((no_sanitize(__VA_ARGS__)))
 #else
-# define UBSAN_DISABLE(x)
+#define FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER(...)
 #endif // UNDEFINED_SANITIZER
+
+/**
+ * Macro for marking functions as having public visibility.
+ */
+#if defined(__GNUC__)
+# if __GNUC_PREREQ(4, 9)
+#  define FOLLY_EXPORT [[gnu::visibility("default")]]
+# else
+#  define FOLLY_EXPORT __attribute__((__visibility__("default")))
+# endif
+#else
+# define FOLLY_EXPORT
+#endif
+
+// noinline
+#ifdef _MSC_VER
+# define FOLLY_NOINLINE __declspec(noinline)
+#elif defined(__clang__) || defined(__GNUC__)
+# define FOLLY_NOINLINE __attribute__((__noinline__))
+#else
+# define FOLLY_NOINLINE
+#endif
+
+// always inline
+#ifdef _MSC_VER
+# define FOLLY_ALWAYS_INLINE __forceinline
+#elif defined(__clang__) || defined(__GNUC__)
+# define FOLLY_ALWAYS_INLINE inline __attribute__((__always_inline__))
+#else
+# define FOLLY_ALWAYS_INLINE inline
+#endif
+
+// attribute hidden
+#if _MSC_VER
+#define FOLLY_ATTR_VISIBILITY_HIDDEN
+#elif defined(__clang__) || defined(__GNUC__)
+#define FOLLY_ATTR_VISIBILITY_HIDDEN __attribute__((__visibility__("hidden")))
+#else
+#define FOLLY_ATTR_VISIBILITY_HIDDEN
+#endif

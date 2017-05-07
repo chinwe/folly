@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -50,7 +50,7 @@ void cEscape(StringPiece str, String& out) {
     if (e == 'P') {  // printable
       ++p;
     } else if (e == 'O') {  // octal
-      out.append(&*last, p - last);
+      out.append(&*last, size_t(p - last));
       esc[1] = '0' + ((v >> 6) & 7);
       esc[2] = '0' + ((v >> 3) & 7);
       esc[3] = '0' + (v & 7);
@@ -58,14 +58,14 @@ void cEscape(StringPiece str, String& out) {
       ++p;
       last = p;
     } else {  // special 1-character escape
-      out.append(&*last, p - last);
+      out.append(&*last, size_t(p - last));
       esc[1] = e;
       out.append(esc, 2);
       ++p;
       last = p;
     }
   }
-  out.append(&*last, p - last);
+  out.append(&*last, size_t(p - last));
 }
 
 namespace detail {
@@ -177,12 +177,12 @@ void uriEscape(StringPiece str, String& out, UriEscapeMode mode) {
     if (LIKELY(discriminator <= minEncode)) {
       ++p;
     } else if (mode == UriEscapeMode::QUERY && discriminator == 3) {
-      out.append(&*last, p - last);
+      out.append(&*last, size_t(p - last));
       out.push_back('+');
       ++p;
       last = p;
     } else {
-      out.append(&*last, p - last);
+      out.append(&*last, size_t(p - last));
       esc[1] = hexValues[v >> 4];
       esc[2] = hexValues[v & 0x0f];
       out.append(esc, 3);
@@ -190,7 +190,7 @@ void uriEscape(StringPiece str, String& out, UriEscapeMode mode) {
       last = p;
     }
   }
-  out.append(&*last, p - last);
+  out.append(&*last, size_t(p - last));
 }
 
 template <class String>
@@ -213,7 +213,7 @@ void uriUnescape(StringPiece str, String& out, UriEscapeMode mode) {
         if (UNLIKELY(h1 == 16 || h2 == 16)) {
           throw std::invalid_argument("invalid percent encode sequence");
         }
-        out.append(&*last, p - last);
+        out.append(&*last, size_t(p - last));
         out.push_back((h1 << 4) | h2);
         p += 3;
         last = p;
@@ -221,7 +221,7 @@ void uriUnescape(StringPiece str, String& out, UriEscapeMode mode) {
       }
     case '+':
       if (mode == UriEscapeMode::QUERY) {
-        out.append(&*last, p - last);
+        out.append(&*last, size_t(p - last));
         out.push_back(' ');
         ++p;
         last = p;
@@ -233,7 +233,7 @@ void uriUnescape(StringPiece str, String& out, UriEscapeMode mode) {
       break;
     }
   }
-  out.append(&*last, p - last);
+  out.append(&*last, size_t(p - last));
 }
 
 namespace detail {
@@ -328,7 +328,7 @@ bool splitFixed(const Delim& delimiter, StringPiece input, OutputType& output) {
   if (exact && UNLIKELY(std::string::npos != input.find(delimiter))) {
     return false;
   }
-  parseTo(input, output);
+  output = folly::to<OutputType>(input);
   return true;
 }
 
@@ -346,7 +346,7 @@ bool splitFixed(
   StringPiece tail(input.begin() + cut + detail::delimSize(delimiter),
                    input.end());
   if (LIKELY(splitFixed<exact>(delimiter, tail, outTail...))) {
-    parseTo(head, outHead);
+    outHead = folly::to<OutputType>(head);
     return true;
   }
   return false;
@@ -587,17 +587,12 @@ bool unhexlify(const InputString& input, OutputString& output) {
   }
   output.resize(input.size() / 2);
   int j = 0;
-  auto unhex = [](char c) -> int {
-    return c >= '0' && c <= '9' ? c - '0' :
-           c >= 'A' && c <= 'F' ? c - 'A' + 10 :
-           c >= 'a' && c <= 'f' ? c - 'a' + 10 :
-           -1;
-  };
 
   for (size_t i = 0; i < input.size(); i += 2) {
-    int highBits = unhex(input[i]);
-    int lowBits = unhex(input[i + 1]);
-    if (highBits < 0 || lowBits < 0) {
+    int highBits = detail::hexTable[static_cast<uint8_t>(input[i])];
+    int lowBits = detail::hexTable[static_cast<uint8_t>(input[i + 1])];
+    if ((highBits | lowBits) & 0x10) {
+      // One of the characters wasn't a hex digit
       return false;
     }
     output[j++] = (highBits << 4) + lowBits;

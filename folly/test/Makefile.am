@@ -2,7 +2,7 @@ SUBDIRS = . function_benchmark
 
 ACLOCAL_AMFLAGS = -I m4
 
-CPPFLAGS += -Igtest-1.7.0/include
+CPPFLAGS += -isystem gtest/googletest/include -isystem gtest/googlemock/include
 
 TESTS= \
 	sorted_vector_types_test \
@@ -10,16 +10,18 @@ TESTS= \
 	hash_test \
 	timeout_queue_test \
 	conv_test \
+	expected_test \
 	range_test \
+	math_test \
 	bits_test \
 	bit_iterator_test
 
 check_LTLIBRARIES = libfollytestmain.la libgtest.la
 check_PROGRAMS =
-noinst_LTLIBRARIES = lib_thread_local_test.la
+noinst_LTLIBRARIES = thread_local_test_lib.la
 
-libgtest_la_CPPFLAGS = -Igtest-1.7.0 -Igtest-1.7.0/src
-libgtest_la_SOURCES = gtest-1.7.0/src/gtest-all.cc
+libgtest_la_CPPFLAGS = -isystem gtest/googletest
+libgtest_la_SOURCES = gtest/googletest/src/gtest-all.cc
 
 if FOLLY_TESTMAIN
 libfollytestmain_la_CPPFLAGS = $(AM_CPPFLAGS) $(libgtest_la_CPPFLAGS)
@@ -27,14 +29,14 @@ libfollytestmain_la_SOURCES = $(libgtest_la_SOURCES) common/TestMain.cpp
 libfollytestmain_la_LIBADD = $(top_builddir)/init/libfollyinit.la $(top_builddir)/libfolly.la
 else
 libfollytestmain_la_CPPFLAGS = $(libgtest_la_CPPFLAGS)
-libfollytestmain_la_SOURCES = $(libgtest_la_SOURCES) gtest-1.7.0/src/gtest_main.cc
+libfollytestmain_la_SOURCES = $(libgtest_la_SOURCES) gtest/googletest/src/gtest_main.cc
 libfollytestmain_la_LIBADD = $(top_builddir)/libfolly.la
 endif
 
-lib_thread_local_test_la_CPPFLAGS = $(AM_CPPFLAGS)
-lib_thread_local_test_la_SOURCES = ThreadLocalTestLib.cpp
-lib_thread_local_test_la_LDFLAGS = -rpath /force_shared
-lib_thread_local_test_la_LIBADD = $(top_builddir)/libfolly.la
+thread_local_test_lib_la_CPPFLAGS = $(AM_CPPFLAGS)
+thread_local_test_lib_la_SOURCES = ThreadLocalTestLib.cpp
+thread_local_test_lib_la_LDFLAGS = -module -rpath /force_shared
+thread_local_test_lib_la_LIBADD = $(top_builddir)/libfolly.la
 
 noinst_HEADERS = FBStringTestBenchmarks.cpp.h \
 	FBVectorTestBenchmarks.cpp.h
@@ -128,8 +130,14 @@ timeout_queue_test_LDADD = libfollytestmain.la
 conv_test_SOURCES = ConvTest.cpp
 conv_test_LDADD = libfollytestmain.la $(top_builddir)/libfollybenchmark.la
 
+expected_test_SOURCES = ExpectedTest.cpp
+expected_test_LDADD = libfollytestmain.la $(top_builddir)/libfollybenchmark.la
+
 range_test_SOURCES = RangeTest.cpp
 range_test_LDADD = libfollytestmain.la
+
+math_test_SOURCES = MathTest.cpp
+math_test_LDADD = libfollytestmain.la $(top_builddir)/libfollybenchmark.la
 
 bits_test_SOURCES = BitsTest.cpp
 bits_test_LDADD = libfollytestmain.la $(top_builddir)/libfollybenchmark.la
@@ -181,10 +189,6 @@ string_test_SOURCES = StringTest.cpp
 string_test_LDADD = libfollytestmain.la
 TESTS += string_test
 
-conditionally_existent_test_SOURCES = ConditionallyExistentTest.cpp
-conditionally_existent_test_LDADD = libfollytestmain.la
-TESTS += conditionally_existent_test
-
 producer_consumer_queue_test_SOURCES = ProducerConsumerQueueTest.cpp
 producer_consumer_queue_test_LDADD = libfollytestmain.la
 TESTS += producer_consumer_queue_test
@@ -196,6 +200,10 @@ TESTS += atomic_hash_array_test
 atomic_hash_map_test_SOURCES = AtomicHashMapTest.cpp
 atomic_hash_map_test_LDADD = libfollytestmain.la $(top_builddir)/libfollybenchmark.la
 TESTS += atomic_hash_map_test
+
+chrono_test_SOURCES = ChronoTest.cpp
+chrono_test_LDADD = libfollytestmain.la
+TESTS += chrono_test
 
 format_test_SOURCES = FormatTest.cpp
 format_test_LDADD = libfollytestmain.la $(top_builddir)/libfollybenchmark.la
@@ -245,6 +253,10 @@ try_test_SOURCES = TryTest.cpp
 try_test_LDADD = libfollytestmain.la
 TESTS += try_test
 
+uncaught_exceptions_test_SOURCES = UncaughtExceptionsTest.cpp
+uncaught_exceptions_test_LDADD = libfollytestmain.la
+TESTS += uncaught_exceptions_test
+
 unit_test_SOURCES = UnitTest.cpp
 unit_test_LDADD = libfollytestmain.la
 TESTS += unit_test
@@ -252,7 +264,6 @@ TESTS += unit_test
 futures_test_SOURCES = \
     ../futures/test/CollectTest.cpp \
     ../futures/test/ContextTest.cpp \
-    ../futures/test/ConversionTest.cpp \
     ../futures/test/CoreTest.cpp \
     ../futures/test/EnsureTest.cpp \
     ../futures/test/ExecutorTest.cpp \
@@ -269,6 +280,7 @@ futures_test_SOURCES = \
     ../futures/test/RetryingTest.cpp \
     ../futures/test/SelfDestructTest.cpp \
     ../futures/test/SharedPromiseTest.cpp \
+    ../futures/test/TestExecutorTest.cpp \
     ../futures/test/ThenCompileTest.cpp \
     ../futures/test/ThenTest.cpp \
     ../futures/test/TimekeeperTest.cpp \
@@ -284,9 +296,16 @@ futures_test_SOURCES = \
 futures_test_LDADD = libfollytestmain.la
 TESTS += futures_test
 
-function_test_SOURCES = FunctionTest.cpp
+function_test_SOURCES = \
+		FunctionRefTest.cpp \
+		FunctionTest.cpp
 function_test_LDADD = libfollytestmain.la
 TESTS += function_test
+
+functional_test_SOURCES = \
+		FunctionalTest.cpp
+functional_test_LDADD = libfollytestmain.la
+TESTS += functional_test
 
 ssl_test_SOURCES = \
 		../ssl/test/OpenSSLHashTest.cpp
@@ -296,5 +315,21 @@ TESTS += ssl_test
 mallctl_helper_test_SOURCES = MallctlHelperTest.cpp
 mallctl_helper_test_LDADD = libfollytestmain.la
 TESTS += mallctl_helper_test
+
+apply_tuple_test_SOURCES = ApplyTupleTest.cpp
+apply_tuple_test_LDADD = libfollytestmain.la
+TESTS += apply_tuple_test
+
+partial_test_SOURCES = PartialTest.cpp
+partial_test_LDADD = libfollytestmain.la
+TESTS += partial_test
+
+singleton_thread_local_test_SOURCES = SingletonThreadLocalTest.cpp
+singleton_thread_local_test_LDADD = libfollytestmain.la
+TESTS += singleton_thread_local_test
+
+utility_test_SOURCES = UtilityTest.cpp
+utility_test_LDADD = libfollytestmain.la
+TESTS += utility_test
 
 check_PROGRAMS += $(TESTS)

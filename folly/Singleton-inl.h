@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@ namespace detail {
 template <typename T>
 template <typename Tag, typename VaultTag>
 SingletonHolder<T>& SingletonHolder<T>::singleton() {
-  static auto entry =
+  /* library-local */ static auto entry =
       createGlobal<SingletonHolder<T>, std::pair<Tag, VaultTag>>([]() {
         return new SingletonHolder<T>({typeid(T), typeid(Tag)},
                                       *SingletonVault::singleton<VaultTag>());
@@ -69,15 +69,16 @@ void SingletonHolder<T>::registerSingletonMock(CreateFunc c, TeardownFunc t) {
     LOG(FATAL) << "Registering mock before singleton was registered: "
                << type().name();
   }
-  destroyInstance();
+  if (state_ == SingletonHolderState::Living) {
+    destroyInstance();
+  }
 
   {
-    RWSpinLock::WriteHolder wh(&vault_.mutex_);
+    auto creationOrder = vault_.creationOrder_.wlock();
 
-    auto it = std::find(
-        vault_.creation_order_.begin(), vault_.creation_order_.end(), type());
-    if (it != vault_.creation_order_.end()) {
-      vault_.creation_order_.erase(it);
+    auto it = std::find(creationOrder->begin(), creationOrder->end(), type());
+    if (it != creationOrder->end()) {
+      creationOrder->erase(it);
     }
   }
 
@@ -154,14 +155,18 @@ void SingletonHolder<T>::destroyInstance() {
   instance_copy_.reset();
   if (destroy_baton_) {
     constexpr std::chrono::seconds kDestroyWaitTime{5};
-    auto wait_result = destroy_baton_->timed_wait(
-      std::chrono::steady_clock::now() + kDestroyWaitTime);
-    if (!wait_result) {
+    auto last_reference_released = destroy_baton_->timed_wait(
+        std::chrono::steady_clock::now() + kDestroyWaitTime);
+    if (last_reference_released) {
+      teardown_(instance_ptr_);
+    } else {
       print_destructor_stack_trace_->store(true);
       LOG(ERROR) << "Singleton of type " << type().name() << " has a "
                  << "living reference at destroyInstances time; beware! Raw "
                  << "pointer is " << instance_ptr_ << ". It is very likely "
                  << "that some other singleton is holding a shared_ptr to it. "
+                 << "This singleton will be leaked (even if a shared_ptr to it "
+                 << "is eventually released)."
                  << "Make sure dependencies between these singletons are "
                  << "properly defined.";
     }
@@ -224,39 +229,51 @@ void SingletonHolder<T>::createInstance() {
 
   creating_thread_.store(std::this_thread::get_id(), std::memory_order_release);
 
-  RWSpinLock::ReadHolder rh(&vault_.stateMutex_);
-  if (vault_.state_ == SingletonVault::SingletonVaultState::Quiescing) {
+  auto state = vault_.state_.rlock();
+  if (vault_.type_ != SingletonVault::Type::Relaxed &&
+      !state->registrationComplete) {
+    auto stack_trace_getter = SingletonVault::stackTraceGetter().load();
+    auto stack_trace = stack_trace_getter ? stack_trace_getter() : "";
+    if (!stack_trace.empty()) {
+      stack_trace = "Stack trace:\n" + stack_trace;
+    }
+
+    LOG(FATAL) << "Singleton " << type().name() << " requested before "
+               << "registrationComplete() call.\n"
+               << "This usually means that either main() never called "
+               << "folly::init, or singleton was requested before main() "
+               << "(which is not allowed).\n"
+               << stack_trace;
+  }
+  if (state->state == SingletonVault::SingletonVaultState::Quiescing) {
     return;
   }
 
   auto destroy_baton = std::make_shared<folly::Baton<>>();
   auto print_destructor_stack_trace =
     std::make_shared<std::atomic<bool>>(false);
-  auto teardown = teardown_;
-  auto type_name = type().name();
 
   // Can't use make_shared -- no support for a custom deleter, sadly.
   std::shared_ptr<T> instance(
-    create_(),
-    [destroy_baton, print_destructor_stack_trace, teardown, type_name]
-    (T* instance_ptr) mutable {
-      teardown(instance_ptr);
-      destroy_baton->post();
-      if (print_destructor_stack_trace->load()) {
-        std::string output = "Singleton " + type_name + " was destroyed.\n";
+      create_(),
+      [ destroy_baton, print_destructor_stack_trace, type = type() ](
+          T*) mutable {
+        destroy_baton->post();
+        if (print_destructor_stack_trace->load()) {
+          std::string output = "Singleton " + type.name() + " was released.\n";
 
-        auto stack_trace_getter = SingletonVault::stackTraceGetter().load();
-        auto stack_trace = stack_trace_getter ? stack_trace_getter() : "";
-        if (stack_trace.empty()) {
-          output += "Failed to get destructor stack trace.";
-        } else {
-          output += "Destructor stack trace:\n";
-          output += stack_trace;
+          auto stack_trace_getter = SingletonVault::stackTraceGetter().load();
+          auto stack_trace = stack_trace_getter ? stack_trace_getter() : "";
+          if (stack_trace.empty()) {
+            output += "Failed to get release stack trace.";
+          } else {
+            output += "Release stack trace:\n";
+            output += stack_trace;
+          }
+
+          LOG(ERROR) << output;
         }
-
-        LOG(ERROR) << output;
-      }
-    });
+      });
 
   // We should schedule destroyInstances() only after the singleton was
   // created. This will ensure it will be destroyed before singletons,
@@ -276,10 +293,7 @@ void SingletonHolder<T>::createInstance() {
   // may access instance and instance_weak w/o synchronization.
   state_.store(SingletonHolderState::Living, std::memory_order_release);
 
-  {
-    RWSpinLock::WriteHolder wh(&vault_.mutex_);
-    vault_.creation_order_.push_back(type());
-  }
+  vault_.creationOrder_.wlock()->push_back(type());
 }
 
 }

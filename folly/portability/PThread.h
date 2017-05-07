@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,34 @@
  */
 
 #pragma once
+
+#include <folly/portability/Config.h>
+
+#if !FOLLY_HAVE_PTHREAD
+
+#ifndef _WIN32
+#error Building Folly without pthreads is only supported on Windows.
+#endif
+
+#include <folly/portability/Windows.h>
+#include <cstdint>
+
+namespace folly {
+namespace portability {
+namespace pthread {
+using pthread_key_t = DWORD;
+
+int pthread_key_create(pthread_key_t* key, void (*destructor)(void*));
+int pthread_key_delete(pthread_key_t key);
+void* pthread_getspecific(pthread_key_t key);
+int pthread_setspecific(pthread_key_t key, const void* value);
+}
+}
+}
+
+/* using override */ using namespace folly::portability::pthread;
+
+#else
 
 #include <pthread.h>
 
@@ -77,7 +105,9 @@ pthread_attr_setstack(pthread_attr_t* attr, void* stackaddr, size_t stacksize) {
   return 0;
 }
 
-inline int pthread_attr_getguardsize(pthread_attr_t* attr, size_t* guardsize) {
+inline int pthread_attr_getguardsize(
+    pthread_attr_t* /* attr */,
+    size_t* guardsize) {
   *guardsize = 0;
   return 0;
 }
@@ -92,4 +122,5 @@ struct hash<pthread_t> {
   }
 };
 }
+#endif
 #endif

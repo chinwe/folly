@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,13 +18,14 @@
 
 #include <assert.h>
 #include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <type_traits>
 #include <utility>
+
 #include <boost/noncopyable.hpp>
-#include <functional>
 #include <glog/logging.h>
-#include <inttypes.h>
 
 namespace folly {
 

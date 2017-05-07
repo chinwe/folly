@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,11 +16,10 @@
 
 #pragma once
 
-#include <gtest/gtest.h>
-
 #include <folly/Foreach.h>
 #include <folly/Random.h>
 #include <folly/Synchronized.h>
+#include <folly/portability/GTest.h>
 #include <glog/logging.h>
 #include <algorithm>
 #include <condition_variable>
@@ -468,17 +467,10 @@ void testDeprecated() {
     EXPECT_EQ(1001, obj.size());
     EXPECT_EQ(10, obj.back());
     EXPECT_EQ(1000, obj2->size());
-
-    UNSYNCHRONIZED(obj) {
-      EXPECT_EQ(1001, obj->size());
-    }
   }
 
   SYNCHRONIZED_CONST (obj) {
     EXPECT_EQ(1001, obj.size());
-    UNSYNCHRONIZED(obj) {
-      EXPECT_EQ(1001, obj->size());
-    }
   }
 
   SYNCHRONIZED (lockedObj, *&obj) {
@@ -506,7 +498,7 @@ template <class Mutex> void testConcurrency() {
     // Test lock()
     for (size_t n = 0; n < itersPerThread; ++n) {
       v.contextualLock()->push_back((itersPerThread * threadIdx) + n);
-      sched_yield();
+      std::this_thread::yield();
     }
   };
   runParallel(numThreads, pushNumbers);

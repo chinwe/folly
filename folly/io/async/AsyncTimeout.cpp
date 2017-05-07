@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements. See the NOTICE file
@@ -128,9 +128,7 @@ void AsyncTimeout::detachTimeoutManager() {
   // currently installed.
   if (isScheduled()) {
     // Programmer bug.  Abort the program.
-    LOG(ERROR) << "detachEventBase() called on scheduled timeout; aborting";
-    abort();
-    return;
+    LOG(FATAL) << "detachEventBase() called on scheduled timeout; aborting";
   }
 
   if (timeoutManager_) {

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,13 +16,13 @@
 
 #include <folly/detail/CacheLocality.h>
 
-#include <sched.h>
+#include <folly/portability/GTest.h>
+
 #include <memory>
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
 #include <glog/logging.h>
-#include <gtest/gtest.h>
 
 using namespace folly::detail;
 

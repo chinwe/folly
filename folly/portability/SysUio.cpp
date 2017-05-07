@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -80,7 +80,7 @@ static ssize_t doVecOperation(int fd, const iovec* iov, int count) {
   void* curBase = iov[0].iov_base;
   size_t curLen = iov[0].iov_len;
   while (curIov < count) {
-    int res = 0;
+    ssize_t res = 0;
     if (isRead) {
       res = read(fd, curBase, (unsigned int)curLen);
       if (res == 0 && curLen != 0) {
@@ -95,7 +95,7 @@ static ssize_t doVecOperation(int fd, const iovec* iov, int count) {
       return -1;
     }
 
-    if (res == curLen) {
+    if (size_t(res) == curLen) {
       curIov++;
       if (curIov < count) {
         curBase = iov[curIov].iov_base;

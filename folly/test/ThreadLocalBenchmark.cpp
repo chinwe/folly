@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,14 +20,11 @@
 
 #include <array>
 #include <atomic>
-#include <chrono>
 #include <condition_variable>
-#include <limits.h>
 #include <map>
 #include <mutex>
 #include <set>
 #include <thread>
-#include <unordered_map>
 
 #include <boost/thread/tss.hpp>
 #include <glog/logging.h>
@@ -35,7 +32,6 @@
 #include <folly/Benchmark.h>
 #include <folly/experimental/io/FsUtil.h>
 #include <folly/portability/GFlags.h>
-#include <folly/portability/Unistd.h>
 
 using namespace folly;
 
@@ -66,7 +62,7 @@ DEFINE_int32(numThreads, 8, "Number simultaneous threads for benchmarks.");
     for (int i = 0; i < FLAGS_numThreads; ++i) {         \
       threads.push_back(std::thread([&]() {              \
         var.reset(new int(0));                           \
-        for (int i = 0; i < itersPerThread; ++i) {       \
+        for (int j = 0; j < itersPerThread; ++j) {       \
           ++(*var.get());                                \
         }                                                \
       }));                                               \

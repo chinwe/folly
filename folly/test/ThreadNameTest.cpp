@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,29 +15,28 @@
  */
 
 #include <thread>
+
 #include <folly/Baton.h>
+#include <folly/ScopeGuard.h>
 #include <folly/ThreadName.h>
-#include <gtest/gtest.h>
+#include <folly/portability/GTest.h>
 
 using namespace std;
 using namespace folly;
 
-constexpr bool expectedSetOtherThreadNameResult =
-#ifdef FOLLY_HAS_PTHREAD_SETNAME_NP_THREAD_NAME
-    true
-#else
-    false // This system has no known way to set the name of another thread
-#endif
-    ;
+static bool expectedSetOtherThreadNameResult = folly::canSetOtherThreadName();
+static bool expectedSetSelfThreadNameResult = folly::canSetCurrentThreadName();
 
-constexpr bool expectedSetSelfThreadNameResult =
-#if defined(FOLLY_HAS_PTHREAD_SETNAME_NP_THREAD_NAME) || \
-    defined(FOLLY_HAS_PTHREAD_SETNAME_NP_NAME)
-    true
-#else
-    false // This system has no known way to set its own thread name
-#endif
-    ;
+TEST(ThreadName, getCurrentThreadName) {
+  static constexpr StringPiece kThreadName{"rockin-thread"};
+  thread th([] {
+    EXPECT_EQ(expectedSetSelfThreadNameResult, setThreadName(kThreadName));
+    if (expectedSetSelfThreadNameResult) {
+      EXPECT_EQ(kThreadName.toString(), getCurrentThreadName().value());
+    }
+  });
+  SCOPE_EXIT { th.join(); };
+}
 
 TEST(ThreadName, setThreadName_self) {
   thread th([] {
@@ -72,4 +71,16 @@ TEST(ThreadName, setThreadName_other_native) {
   EXPECT_EQ(
       expectedSetOtherThreadNameResult,
       setThreadName(th.native_handle(), "rockin-thread"));
+}
+
+TEST(ThreadName, setThreadName_other_id) {
+  Baton<> let_thread_end;
+  thread th([&] {
+      let_thread_end.wait();
+  });
+  SCOPE_EXIT { th.join(); };
+  SCOPE_EXIT { let_thread_end.post(); };
+  EXPECT_EQ(
+      expectedSetOtherThreadNameResult,
+      setThreadName(th.get_id(), "rockin-thread"));
 }

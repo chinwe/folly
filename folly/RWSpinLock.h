@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -156,11 +156,11 @@ pthread_rwlock_t Read        728698     24us       101ns     7.28ms     194us
 #undef RW_SPINLOCK_USE_SSE_INSTRUCTIONS_
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <string>
-#include <algorithm>
+#include <thread>
 
-#include <sched.h>
 #include <glog/logging.h>
 
 #include <folly/Likely.h>
@@ -194,7 +194,7 @@ class RWSpinLock {
   void lock() {
     int count = 0;
     while (!LIKELY(try_lock())) {
-      if (++count > 1000) sched_yield();
+      if (++count > 1000) std::this_thread::yield();
     }
   }
 
@@ -208,7 +208,7 @@ class RWSpinLock {
   void lock_shared() {
     int count = 0;
     while (!LIKELY(try_lock_shared())) {
-      if (++count > 1000) sched_yield();
+      if (++count > 1000) std::this_thread::yield();
     }
   }
 
@@ -226,7 +226,7 @@ class RWSpinLock {
   void lock_upgrade() {
     int count = 0;
     while (!try_lock_upgrade()) {
-      if (++count > 1000) sched_yield();
+      if (++count > 1000) std::this_thread::yield();
     }
   }
 
@@ -238,7 +238,7 @@ class RWSpinLock {
   void unlock_upgrade_and_lock() {
     int64_t count = 0;
     while (!try_unlock_upgrade_and_lock()) {
-      if (++count > 1000) sched_yield();
+      if (++count > 1000) std::this_thread::yield();
     }
   }
 
@@ -307,7 +307,7 @@ class RWSpinLock {
 
   class ReadHolder {
    public:
-    explicit ReadHolder(RWSpinLock* lock = nullptr) : lock_(lock) {
+    explicit ReadHolder(RWSpinLock* lock) : lock_(lock) {
       if (lock_) lock_->lock_shared();
     }
 
@@ -360,7 +360,7 @@ class RWSpinLock {
 
   class UpgradedHolder {
    public:
-    explicit UpgradedHolder(RWSpinLock* lock = nullptr) : lock_(lock) {
+    explicit UpgradedHolder(RWSpinLock* lock) : lock_(lock) {
       if (lock_) lock_->lock_upgrade();
     }
 
@@ -409,7 +409,7 @@ class RWSpinLock {
 
   class WriteHolder {
    public:
-    explicit WriteHolder(RWSpinLock* lock = nullptr) : lock_(lock) {
+    explicit WriteHolder(RWSpinLock* lock) : lock_(lock) {
       if (lock_) lock_->lock();
     }
 
@@ -479,13 +479,14 @@ struct RWTicketIntTrait<64> {
 
 #ifdef RW_SPINLOCK_USE_SSE_INSTRUCTIONS_
   static __m128i make128(const uint16_t v[4]) {
-    return _mm_set_epi16(0, 0, 0, 0, v[3], v[2], v[1], v[0]);
+    return _mm_set_epi16(0, 0, 0, 0,
+        short(v[3]), short(v[2]), short(v[1]), short(v[0]));
   }
   static inline __m128i fromInteger(uint64_t from) {
-    return _mm_cvtsi64_si128(from);
+    return _mm_cvtsi64_si128(int64_t(from));
   }
   static inline uint64_t toInteger(__m128i in) {
-    return _mm_cvtsi128_si64(in);
+    return uint64_t(_mm_cvtsi128_si64(in));
   }
   static inline uint64_t addParallel(__m128i in, __m128i kDelta) {
     return toInteger(_mm_add_epi16(in, kDelta));
@@ -501,14 +502,17 @@ struct RWTicketIntTrait<32> {
 
 #ifdef RW_SPINLOCK_USE_SSE_INSTRUCTIONS_
   static __m128i make128(const uint8_t v[4]) {
-    return _mm_set_epi8(0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, v[3], v[2], v[1], v[0]);
+    return _mm_set_epi8(
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        char(v[3]), char(v[2]), char(v[1]), char(v[0]));
   }
   static inline __m128i fromInteger(uint32_t from) {
-    return _mm_cvtsi32_si128(from);
+    return _mm_cvtsi32_si128(int32_t(from));
   }
   static inline uint32_t toInteger(__m128i in) {
-    return _mm_cvtsi128_si32(in);
+    return uint32_t(_mm_cvtsi128_si32(in));
   }
   static inline uint32_t addParallel(__m128i in, __m128i kDelta) {
     return toInteger(_mm_add_epi8(in, kDelta));
@@ -597,7 +601,7 @@ class RWTicketSpinLockT {
    * turns.
    */
   void writeLockAggressive() {
-    // sched_yield() is needed here to avoid a pathology if the number
+    // std::this_thread::yield() is needed here to avoid a pathology if the number
     // of threads attempting concurrent writes is >= the number of real
     // cores allocated to this process. This is less likely than the
     // corresponding situation in lock_shared(), but we still want to
@@ -606,7 +610,7 @@ class RWTicketSpinLockT {
     QuarterInt val = __sync_fetch_and_add(&ticket.users, 1);
     while (val != load_acquire(&ticket.write)) {
       asm_volatile_pause();
-      if (UNLIKELY(++count > 1000)) sched_yield();
+      if (UNLIKELY(++count > 1000)) std::this_thread::yield();
     }
   }
 
@@ -619,7 +623,7 @@ class RWTicketSpinLockT {
     // there are a lot of competing readers.  The aggressive spinning
     // can help to avoid starving writers.
     //
-    // We don't worry about sched_yield() here because the caller
+    // We don't worry about std::this_thread::yield() here because the caller
     // has already explicitly abandoned fairness.
     while (!try_lock()) {}
   }
@@ -649,13 +653,13 @@ class RWTicketSpinLockT {
   }
 
   void lock_shared() {
-    // sched_yield() is important here because we can't grab the
+    // std::this_thread::yield() is important here because we can't grab the
     // shared lock if there is a pending writeLockAggressive, so we
     // need to let threads that already have a shared lock complete
     int count = 0;
     while (!LIKELY(try_lock_shared())) {
       asm_volatile_pause();
-      if (UNLIKELY((++count & 1023) == 0)) sched_yield();
+      if (UNLIKELY((++count & 1023) == 0)) std::this_thread::yield();
     }
   }
 
@@ -688,8 +692,7 @@ class RWTicketSpinLockT {
     ReadHolder(ReadHolder const&) = delete;
     ReadHolder& operator=(ReadHolder const&) = delete;
 
-    explicit ReadHolder(RWSpinLock *lock = nullptr) :
-      lock_(lock) {
+    explicit ReadHolder(RWSpinLock* lock) : lock_(lock) {
       if (lock_) lock_->lock_shared();
     }
 
@@ -728,7 +731,7 @@ class RWTicketSpinLockT {
     WriteHolder(WriteHolder const&) = delete;
     WriteHolder& operator=(WriteHolder const&) = delete;
 
-    explicit WriteHolder(RWSpinLock *lock = nullptr) : lock_(lock) {
+    explicit WriteHolder(RWSpinLock* lock) : lock_(lock) {
       if (lock_) lock_->lock();
     }
     explicit WriteHolder(RWSpinLock &lock) : lock_ (&lock) {

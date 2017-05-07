@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,7 +29,6 @@ namespace folly {
 namespace detail {
 size_t qfind_first_byte_of_sse42(const StringPieceLite haystack,
                                  const StringPieceLite needles) {
-  CHECK(false) << "Function " << __func__ << " only works with SSE42!";
   return qfind_first_byte_of_nosse(haystack, needles);
 }
 }
@@ -89,9 +88,9 @@ static size_t qfind_first_byte_of_needles16(const StringPieceLite haystack,
 // helper method for case where needles.size() <= 16
 size_t qfind_first_byte_of_needles16(const StringPieceLite haystack,
                                      const StringPieceLite needles) {
-  DCHECK_GT(haystack.size(), 0);
-  DCHECK_GT(needles.size(), 0);
-  DCHECK_LE(needles.size(), 16);
+  DCHECK_GT(haystack.size(), 0u);
+  DCHECK_GT(needles.size(), 0u);
+  DCHECK_LE(needles.size(), 16u);
   if ((needles.size() <= 2 && haystack.size() >= 256) ||
       // must bail if we can't even SSE-load a single segment of haystack
       (haystack.size() < 16 &&
@@ -106,10 +105,10 @@ size_t qfind_first_byte_of_needles16(const StringPieceLite haystack,
   // do an unaligned load for first block of haystack
   auto arr1 = _mm_loadu_si128(
       reinterpret_cast<const __m128i*>(haystack.data()));
-  auto index = _mm_cmpestri(arr2, needles.size(),
-                            arr1, haystack.size(), 0);
+  auto index =
+      _mm_cmpestri(arr2, int(needles.size()), arr1, int(haystack.size()), 0);
   if (index < 16) {
-    return index;
+    return size_t(index);
   }
 
   // Now, we can do aligned loads hereafter...
@@ -117,7 +116,8 @@ size_t qfind_first_byte_of_needles16(const StringPieceLite haystack,
   for (; i < haystack.size(); i+= 16) {
     arr1 =
         _mm_load_si128(reinterpret_cast<const __m128i*>(haystack.data() + i));
-    index = _mm_cmpestri(arr2, needles.size(), arr1, haystack.size() - i, 0);
+    index = _mm_cmpestri(
+        arr2, int(needles.size()), arr1, int(haystack.size() - i), 0);
     if (index < 16) {
       return i + index;
     }
@@ -143,7 +143,7 @@ template <bool HAYSTACK_ALIGNED>
 size_t scanHaystackBlock(const StringPieceLite haystack,
                          const StringPieceLite needles,
                          uint64_t blockStartIdx) {
-  DCHECK_GT(needles.size(), 16);  // should handled by *needles16() method
+  DCHECK_GT(needles.size(), 16u); // should handled by *needles16() method
   DCHECK(blockStartIdx + 16 <= haystack.size() ||
          (page_for(haystack.data() + blockStartIdx) ==
           page_for(haystack.data() + blockStartIdx + 15)));
@@ -160,8 +160,8 @@ size_t scanHaystackBlock(const StringPieceLite haystack,
   // This load is safe because needles.size() >= 16
   auto arr2 = _mm_loadu_si128(
       reinterpret_cast<const __m128i*>(needles.data()));
-  size_t b = _mm_cmpestri(
-      arr2, 16, arr1, haystack.size() - blockStartIdx, 0);
+  auto b =
+      _mm_cmpestri(arr2, 16, arr1, int(haystack.size() - blockStartIdx), 0);
 
   size_t j = nextAlignedIndex(needles.data());
   for (; j < needles.size(); j += 16) {
@@ -169,9 +169,12 @@ size_t scanHaystackBlock(const StringPieceLite haystack,
         reinterpret_cast<const __m128i*>(needles.data() + j));
 
     auto index = _mm_cmpestri(
-      arr2, needles.size() - j,
-      arr1, haystack.size() - blockStartIdx, 0);
-    b = std::min<size_t>(index, b);
+        arr2,
+        int(needles.size() - j),
+        arr1,
+        int(haystack.size() - blockStartIdx),
+        0);
+    b = std::min(index, b);
   }
 
   if (b < 16) {

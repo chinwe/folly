@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include <folly/Exception.h>
 #include <folly/FileUtil.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/EventHandler.h>
@@ -88,7 +89,7 @@ class NotificationQueue {
      * messageAvailable() will be invoked whenever a new
      * message is available from the pipe.
      */
-    virtual void messageAvailable(MessageT&& message) = 0;
+    virtual void messageAvailable(MessageT&& message) noexcept = 0;
 
     /**
      * Begin consuming messages from the specified queue.
@@ -422,9 +423,9 @@ class NotificationQueue {
       return false;
     }
 
-    auto data = std::move(queue_.front());
-    result = data.first;
-    RequestContext::setContext(data.second);
+    auto& data = queue_.front();
+    result = std::move(data.first);
+    RequestContext::setContext(std::move(data.second));
 
     queue_.pop_front();
 
@@ -457,7 +458,7 @@ class NotificationQueue {
   NotificationQueue& operator=(NotificationQueue const &) = delete;
 
   inline bool checkQueueSize(size_t maxSize, bool throws=true) const {
-    DCHECK(0 == spinlock_.trylock());
+    DCHECK(0 == spinlock_.try_lock());
     if (maxSize > 0 && queue_.size() >= maxSize) {
       if (throws) {
         throw std::overflow_error("unable to add message to NotificationQueue: "
@@ -488,17 +489,17 @@ class NotificationQueue {
     }
 
     ssize_t bytes_written = 0;
-    ssize_t bytes_expected = 0;
+    size_t bytes_expected = 0;
 
     do {
       if (eventfd_ >= 0) {
         // eventfd(2) dictates that we must write a 64-bit integer
         uint64_t signal = 1;
-        bytes_expected = static_cast<ssize_t>(sizeof(signal));
+        bytes_expected = sizeof(signal);
         bytes_written = ::write(eventfd_, &signal, bytes_expected);
       } else {
         uint8_t signal = 1;
-        bytes_expected = static_cast<ssize_t>(sizeof(signal));
+        bytes_expected = sizeof(signal);
         bytes_written = ::write(pipeFds_[1], &signal, bytes_expected);
       }
     } while (bytes_written == -1 && errno == EINTR);
@@ -510,7 +511,7 @@ class NotificationQueue {
     }
 #endif
 
-    if (bytes_written == bytes_expected) {
+    if (bytes_written == ssize_t(bytes_expected)) {
       signal_ = true;
     } else {
 #ifdef __ANDROID__
@@ -753,7 +754,7 @@ void NotificationQueue<MessageT>::Consumer::consumeMessages(
       if (wasEmpty) {
         return;
       }
-    } catch (const std::exception& ex) {
+    } catch (const std::exception&) {
       // This catch block is really just to handle the case where the MessageT
       // constructor throws.  The messageAvailable() callback itself is
       // declared as noexcept and should never throw.
@@ -855,7 +856,7 @@ struct notification_queue_consumer_wrapper
       : callback_(std::forward<UCallback>(callback)) {}
 
   // we are being stricter here and requiring noexcept for callback
-  void messageAvailable(MessageT&& message) override {
+  void messageAvailable(MessageT&& message) noexcept override {
     static_assert(
       noexcept(std::declval<TCallback>()(std::forward<MessageT>(message))),
       "callback must be declared noexcept, e.g.: `[]() noexcept {}`"

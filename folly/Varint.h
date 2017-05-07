@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -87,8 +87,8 @@ inline size_t encodeVarint(uint64_t val, uint8_t* buf) {
     *p++ = 0x80 | (val & 0x7f);
     val >>= 7;
   }
-  *p++ = val;
-  return p - buf;
+  *p++ = uint8_t(val);
+  return size_t(p - buf);
 }
 
 template <class T>
@@ -133,7 +133,7 @@ inline uint64_t decodeVarint(Range<T*>& data) {
     val |= static_cast<uint64_t>(*p++) << shift;
   }
 
-  data.advance(p - begin);
+  data.uncheckedAdvance(p - begin);
   return val;
 }
 

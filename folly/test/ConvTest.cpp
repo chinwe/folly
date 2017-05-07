@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,10 +14,18 @@
  * limitations under the License.
  */
 
+#ifndef __STDC_FORMAT_MACROS
+#define __STDC_FORMAT_MACROS 1
+#endif
+
 #include <boost/lexical_cast.hpp>
+
 #include <folly/Conv.h>
 #include <folly/Foreach.h>
-#include <gtest/gtest.h>
+#include <folly/portability/GTest.h>
+
+#include <algorithm>
+#include <cinttypes>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -226,8 +234,8 @@ void test128Bit2String() {
 #endif
 
 TEST(Conv, Integral2String) {
-  testIntegral2String<std::string, char, short, int, long>();
-  testIntegral2String<fbstring, char, short, int, long>();
+  testIntegral2String<std::string, int8_t, int16_t, int32_t, int64_t>();
+  testIntegral2String<fbstring, int8_t, int16_t, int32_t, int64_t>();
 
 #if FOLLY_HAVE_INT128_T
   test128Bit2String<std::string>();
@@ -423,9 +431,9 @@ void testString2Integral() {
 }
 
 TEST(Conv, String2Integral) {
-  testString2Integral<const char*, signed char, short, int, long, long long>();
-  testString2Integral<std::string, signed char, short, int, long, long long>();
-  testString2Integral<fbstring, signed char, short, int, long, long long>();
+  testString2Integral<const char*, int8_t, int16_t, int32_t, int64_t>();
+  testString2Integral<std::string, int8_t, int16_t, int32_t, int64_t>();
+  testString2Integral<fbstring, int8_t, int16_t, int32_t, int64_t>();
 
   // Testing the behavior of the StringPiece* API
   // StringPiece* normally parses as much valid data as it can,
@@ -656,10 +664,10 @@ TEST(Conv, DoubleToInt) {
   auto i = to<int>(42.0);
   EXPECT_EQ(i, 42);
   try {
-    auto i = to<int>(42.1);
-    LOG(ERROR) << "to<int> returned " << i << " instead of throwing";
+    auto i2 = to<int>(42.1);
+    LOG(ERROR) << "to<int> returned " << i2 << " instead of throwing";
     EXPECT_TRUE(false);
-  } catch (std::range_error& e) {
+  } catch (std::range_error&) {
     //LOG(INFO) << e.what();
   }
 }
@@ -671,12 +679,12 @@ TEST(Conv, EnumToInt) {
   auto j = to<char>(x);
   EXPECT_EQ(j, 42);
   try {
-    auto i = to<char>(y);
+    auto i2 = to<char>(y);
     LOG(ERROR) << "to<char> returned "
-               << static_cast<unsigned int>(i)
+               << static_cast<unsigned int>(i2)
                << " instead of throwing";
     EXPECT_TRUE(false);
-  } catch (std::range_error& e) {
+  } catch (std::range_error&) {
     //LOG(INFO) << e.what();
   }
 }
@@ -696,12 +704,12 @@ TEST(Conv, IntToEnum) {
   auto j = to<A>(100);
   EXPECT_EQ(j, 100);
   try {
-    auto i = to<A>(5000000000L);
+    auto i2 = to<A>(5000000000L);
     LOG(ERROR) << "to<A> returned "
-               << static_cast<unsigned int>(i)
+               << static_cast<unsigned int>(i2)
                << " instead of throwing";
     EXPECT_TRUE(false);
-  } catch (std::range_error& e) {
+  } catch (std::range_error&) {
     //LOG(INFO) << e.what();
   }
 }
@@ -718,7 +726,7 @@ TEST(Conv, UnsignedEnum) {
     auto i = to<int32_t>(x);
     LOG(ERROR) << "to<int32_t> returned " << i << " instead of throwing";
     EXPECT_TRUE(false);
-  } catch (std::range_error& e) {
+  } catch (std::range_error&) {
   }
 }
 
@@ -731,7 +739,7 @@ TEST(Conv, UnsignedEnumClass) {
   EXPECT_EQ(E::x, to<E>(3000000000U));
   EXPECT_EQ(E::x, to<E>("3000000000"));
   E e;
-  parseTo("3000000000", e);
+  EXPECT_TRUE(parseTo("3000000000", e).hasValue());
   EXPECT_EQ(E::x, e);
   EXPECT_THROW(to<int32_t>(E::x), std::range_error);
 }
@@ -820,6 +828,14 @@ TEST(Conv, StringToBool) {
   EXPECT_EQ(buf5, sp5.begin());
 }
 
+TEST(Conv, Transform) {
+  const std::vector<int64_t> in{1, 2, 3};
+  std::vector<std::string> out(in.size());
+  std::transform(in.begin(), in.end(), out.begin(), to<std::string, int64_t>);
+  const std::vector<std::string> ref{"1", "2", "3"};
+  EXPECT_EQ(ref, out);
+}
+
 TEST(Conv, FloatToInt) {
   EXPECT_EQ(to<int>(42.0f), 42);
   EXPECT_EQ(to<int8_t>(-128.0f), int8_t(-128));
@@ -874,7 +890,7 @@ template <typename F>
 void testConvError(
     F&& expr,
     const char* exprStr,
-    ConversionError::Code code,
+    ConversionCode code,
     const char* value,
     bool quotedValue,
     int line) {
@@ -907,7 +923,7 @@ void testConvError(
   testConvError(                                           \
       [&] { return expr; },                                \
       #expr,                                               \
-      ConversionError::code,                               \
+      ConversionCode::code,                                \
       value,                                               \
       quoted,                                              \
       __LINE__)
@@ -1026,6 +1042,91 @@ TEST(Conv, ConversionErrorFloatToInt) {
   EXPECT_CONV_ERROR_ARITH(int8_t, 65.5, ARITH_LOSS_OF_PRECISION);
 }
 
+TEST(Conv, TryStringToBool) {
+  auto rv1 = folly::tryTo<bool>("xxxx");
+  EXPECT_FALSE(rv1.hasValue());
+  auto rv2 = folly::tryTo<bool>("false");
+  EXPECT_TRUE(rv2.hasValue());
+  EXPECT_FALSE(rv2.value());
+  auto rv3 = folly::tryTo<bool>("yes");
+  EXPECT_TRUE(rv3.hasValue());
+  EXPECT_TRUE(rv3.value());
+}
+
+TEST(Conv, TryStringToInt) {
+  auto rv1 = folly::tryTo<int>("1000000000000000000000000000000");
+  EXPECT_FALSE(rv1.hasValue());
+  auto rv2 = folly::tryTo<int>("4711");
+  EXPECT_TRUE(rv2.hasValue());
+  EXPECT_EQ(rv2.value(), 4711);
+}
+
+TEST(Conv, TryStringToFloat) {
+  auto rv1 = folly::tryTo<float>("");
+  EXPECT_FALSE(rv1.hasValue());
+  auto rv2 = folly::tryTo<float>("3.14");
+  EXPECT_TRUE(rv2.hasValue());
+  EXPECT_NEAR(rv2.value(), 3.14, 1e-5);
+}
+
+TEST(Conv, TryStringToDouble) {
+  auto rv1 = folly::tryTo<double>("");
+  EXPECT_FALSE(rv1.hasValue());
+  auto rv2 = folly::tryTo<double>("3.14");
+  EXPECT_TRUE(rv2.hasValue());
+  EXPECT_NEAR(rv2.value(), 3.14, 1e-10);
+}
+
+TEST(Conv, TryIntToInt) {
+  auto rv1 = folly::tryTo<uint8_t>(256);
+  EXPECT_FALSE(rv1.hasValue());
+  auto rv2 = folly::tryTo<uint8_t>(255);
+  EXPECT_TRUE(rv2.hasValue());
+  EXPECT_EQ(rv2.value(), 255);
+}
+
+TEST(Conv, TryFloatToFloat) {
+  auto rv1 = folly::tryTo<float>(1e100);
+  EXPECT_FALSE(rv1.hasValue());
+  auto rv2 = folly::tryTo<double>(25.5f);
+  EXPECT_TRUE(rv2.hasValue());
+  EXPECT_NEAR(rv2.value(), 25.5, 1e-10);
+}
+
+TEST(Conv, TryFloatToInt) {
+  auto rv1 = folly::tryTo<int>(100.001);
+  EXPECT_FALSE(rv1.hasValue());
+  auto rv2 = folly::tryTo<int>(100.0);
+  EXPECT_TRUE(rv2.hasValue());
+  EXPECT_EQ(rv2.value(), 100);
+}
+
+TEST(Conv, TryIntToFloat) {
+  auto rv1 = folly::tryTo<float>(std::numeric_limits<uint64_t>::max());
+  EXPECT_FALSE(rv1.hasValue());
+  auto rv2 = folly::tryTo<float>(1000ULL);
+  EXPECT_TRUE(rv2.hasValue());
+  EXPECT_EQ(rv2.value(), 1000.0f);
+}
+
+TEST(Conv, TryPtrPairToInt) {
+  StringPiece sp1("1000000000000000000000000000000");
+  auto rv1 = folly::tryTo<int>(sp1.begin(), sp1.end());
+  EXPECT_FALSE(rv1.hasValue());
+  StringPiece sp2("4711");
+  auto rv2 = folly::tryTo<int>(sp2.begin(), sp2.end());
+  EXPECT_TRUE(rv2.hasValue());
+  EXPECT_EQ(rv2.value(), 4711);
+  StringPiece sp3("-4711");
+  auto rv3 = folly::tryTo<int>(sp3.begin(), sp3.end());
+  EXPECT_TRUE(rv3.hasValue());
+  EXPECT_EQ(rv3.value(), -4711);
+  StringPiece sp4("4711");
+  auto rv4 = folly::tryTo<uint16_t>(sp4.begin(), sp4.end());
+  EXPECT_TRUE(rv4.hasValue());
+  EXPECT_EQ(rv4.value(), 4711);
+}
+
 TEST(Conv, NewUint64ToString) {
   char buf[21];
 
@@ -1091,10 +1192,12 @@ struct Dimensions {
   }
 };
 
-void parseTo(folly::StringPiece in, Dimensions& out) {
-  out.w = folly::to<int>(&in);
-  in.removePrefix("x");
-  out.h = folly::to<int>(&in);
+Expected<StringPiece, ConversionCode> parseTo(
+    folly::StringPiece in,
+    Dimensions& out) {
+  return parseTo(in, out.w)
+      .then([](StringPiece sp) { return sp.removePrefix("x"), sp; })
+      .then([&](StringPiece sp) { return parseTo(sp, out.h); });
 }
 
 template <class String>
@@ -1116,4 +1219,11 @@ TEST(Conv, custom_kkproviders) {
   // make sure above implementation of estimateSpaceNeeded() is used.
   EXPECT_GT(str.capacity(), 2000);
   EXPECT_LT(str.capacity(), 2500);
+}
+
+TEST(Conv, TryToThenWithVoid) {
+  auto x = tryTo<int>("42").then([](int) {});
+  EXPECT_TRUE(x.hasValue());
+  Unit u = x.value();
+  (void)u;
 }

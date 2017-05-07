@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,13 +33,13 @@
  * to complete, returning the exit status.
  *
  * A thread-safe [1] version of popen() (type="r", to read from the child):
- *    Subprocess proc(cmd, Subprocess::pipeStdout());
- *    // read from proc.stdout()
+ *    Subprocess proc(cmd, Subprocess::Options().pipeStdout());
+ *    // read from proc.stdoutFd()
  *    proc.wait();
  *
  * A thread-safe [1] version of popen() (type="w", to write to the child):
- *    Subprocess proc(cmd, Subprocess::pipeStdin());
- *    // write to proc.stdin()
+ *    Subprocess proc(cmd, Subprocess::Options().pipeStdin());
+ *    // write to proc.stdinFd()
  *    proc.wait();
  *
  * If you want to redirect both stdin and stdout to pipes, you can, but note
@@ -106,17 +106,17 @@
 #include <string>
 
 #include <boost/container/flat_map.hpp>
-#include <boost/operators.hpp>
 
 #include <folly/Exception.h>
 #include <folly/File.h>
 #include <folly/FileUtil.h>
 #include <folly/Function.h>
-#include <folly/gen/String.h>
-#include <folly/io/IOBufQueue.h>
 #include <folly/MapUtil.h>
+#include <folly/Optional.h>
 #include <folly/Portability.h>
 #include <folly/Range.h>
+#include <folly/gen/String.h>
+#include <folly/io/IOBufQueue.h>
 
 namespace folly {
 
@@ -274,7 +274,7 @@ class Subprocess {
    * the close-on-exec flag is set (fcntl FD_CLOEXEC) and inherited
    * otherwise.
    */
-  class Options : private boost::orable<Options> {
+  class Options {
     friend class Subprocess;
    public:
     Options() {}  // E.g. https://gcc.gnu.org/bugzilla/show_bug.cgi?id=58328
@@ -298,19 +298,19 @@ class Subprocess {
     /**
      * Shortcut to change the action for standard input.
      */
-    Options& stdin(int action) { return fd(STDIN_FILENO, action); }
+    Options& stdinFd(int action) { return fd(STDIN_FILENO, action); }
 
     /**
      * Shortcut to change the action for standard output.
      */
-    Options& stdout(int action) { return fd(STDOUT_FILENO, action); }
+    Options& stdoutFd(int action) { return fd(STDOUT_FILENO, action); }
 
     /**
      * Shortcut to change the action for standard error.
      * Note that stderr(1) will redirect the standard error to the same
      * file descriptor as standard output; the equivalent of bash's "2>&1"
      */
-    Options& stderr(int action) { return fd(STDERR_FILENO, action); }
+    Options& stderrFd(int action) { return fd(STDERR_FILENO, action); }
 
     Options& pipeStdin() { return fd(STDIN_FILENO, PIPE_IN); }
     Options& pipeStdout() { return fd(STDOUT_FILENO, PIPE_OUT); }
@@ -397,10 +397,28 @@ class Subprocess {
       return *this;
     }
 
+#if __linux__
     /**
-     * Helpful way to combine Options.
+     * This is an experimental feature, it is best you don't use it at this
+     * point of time.
+     * Although folly would support cloning with custom flags in some form, this
+     * API might change in the near future. So use the following assuming it is
+     * experimental. (Apr 11, 2017)
+     *
+     * This unlocks Subprocess to support clone flags, many of them need
+     * CAP_SYS_ADMIN permissions. It might also require you to go through the
+     * implementation to understand what happens before, between and after the
+     * fork-and-exec.
+     *
+     * `man 2 clone` would be a starting point for knowing about the available
+     * flags.
      */
-    Options& operator|=(const Options& other);
+    using clone_flags_t = uint64_t;
+    Options& useCloneWithFlags(clone_flags_t cloneFlags) noexcept {
+      cloneFlags_ = cloneFlags;
+      return *this;
+    }
+#endif
 
    private:
     typedef boost::container::flat_map<int, int> FdMap;
@@ -414,11 +432,12 @@ class Subprocess {
     bool processGroupLeader_{false};
     DangerousPostForkPreExecCallback*
       dangerousPostForkPreExecCallback_{nullptr};
+#if __linux__
+    // none means `vfork()` instead of a custom `clone()`
+    // Optional<> is used because value of '0' means do clone without any flags.
+    Optional<clone_flags_t> cloneFlags_;
+#endif
   };
-
-  static Options pipeStdin() { return Options().stdin(PIPE); }
-  static Options pipeStdout() { return Options().stdout(PIPE); }
-  static Options pipeStderr() { return Options().stderr(PIPE); }
 
   // Non-copiable, but movable
   Subprocess(const Subprocess&) = delete;
@@ -456,6 +475,7 @@ class Subprocess {
    * The shell to use is taken from the environment variable $SHELL,
    * or /bin/sh if $SHELL is unset.
    */
+  FOLLY_DEPRECATED("Prefer not running in a shell or use `shellify`.")
   explicit Subprocess(
       const std::string& cmd,
       const Options& options = Options(),
@@ -767,9 +787,9 @@ class Subprocess {
   int parentFd(int childFd) const {
     return pipes_[findByChildFd(childFd)].pipe.fd();
   }
-  int stdin() const { return parentFd(0); }
-  int stdout() const { return parentFd(1); }
-  int stderr() const { return parentFd(2); }
+  int stdinFd() const { return parentFd(0); }
+  int stdoutFd() const { return parentFd(1); }
+  int stderrFd() const { return parentFd(2); }
 
   /**
    * The child's pipes are logically separate from the process metadata
@@ -860,18 +880,5 @@ class Subprocess {
   // so we're happy with a vector here, even if it means linear erase.
   std::vector<Pipe> pipes_;
 };
-
-inline Subprocess::Options& Subprocess::Options::operator|=(
-    const Subprocess::Options& other) {
-  if (this == &other) return *this;
-  // Replace
-  for (auto& p : other.fdActions_) {
-    fdActions_[p.first] = p.second;
-  }
-  closeOtherFds_ |= other.closeOtherFds_;
-  usePath_ |= other.usePath_;
-  processGroupLeader_ |= other.processGroupLeader_;
-  return *this;
-}
 
 }  // namespace folly

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,12 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <folly/Random.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/HHWheelTimer.h>
 #include <folly/io/async/test/UndelayedDestruction.h>
 #include <folly/io/async/test/Util.h>
+#include <folly/portability/GTest.h>
 
-#include <gtest/gtest.h>
 #include <thread>
 #include <vector>
 
@@ -55,10 +56,8 @@ class TestTimeout : public HHWheelTimer::Callback {
 
 class TestTimeoutDelayed : public TestTimeout {
  protected:
-  std::chrono::milliseconds getCurTime() override {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-               std::chrono::steady_clock::now().time_since_epoch()) -
-        milliseconds(5);
+  std::chrono::steady_clock::time_point getCurTime() override {
+    return std::chrono::steady_clock::now() - milliseconds(5);
   }
 };
 
@@ -271,4 +270,53 @@ TEST_F(HHWheelTimerTest, Level1) {
       start, t1.timestamps[0], milliseconds(605), milliseconds(256));
   T_CHECK_TIMEOUT(
       start, t2.timestamps[0], milliseconds(300), milliseconds(256));
+}
+
+TEST_F(HHWheelTimerTest, Stress) {
+  StackWheelTimer t(&eventBase, milliseconds(1));
+
+  long timeoutcount = 10000;
+  TestTimeout timeouts[10000];
+  long runtimeouts = 0;
+  for (long i = 0; i < timeoutcount; i++) {
+    long timeout = Random::rand32(1, 10000);
+    if (Random::rand32(3)) {
+      // NOTE: hhwheel timer runs before eventbase runAfterDelay,
+      // so runAfterDelay cancelTimeout() must run  at least one timerwheel
+      // before scheduleTimeout, to ensure it runs first.
+      timeout += 256;
+      t.scheduleTimeout(&timeouts[i], std::chrono::milliseconds(timeout));
+      eventBase.runAfterDelay(
+          [&, i]() {
+            timeouts[i].fn = nullptr;
+            timeouts[i].cancelTimeout();
+            runtimeouts++;
+            LOG(INFO) << "Ran " << runtimeouts << " timeouts, cancelled";
+          },
+          timeout - 256);
+      timeouts[i].fn = [&, i, timeout]() {
+        LOG(INFO) << "FAIL:timer " << i << " still fired in " << timeout;
+        EXPECT_FALSE(true);
+      };
+    } else {
+      t.scheduleTimeout(&timeouts[i], std::chrono::milliseconds(timeout));
+      timeouts[i].fn = [&, i]() {
+        timeoutcount++;
+        long newtimeout = Random::rand32(1, 10000);
+        t.scheduleTimeout(&timeouts[i], std::chrono::milliseconds(newtimeout));
+        runtimeouts++;
+        /* sleep override */ usleep(1000);
+        LOG(INFO) << "Ran " << runtimeouts << " timeouts of " << timeoutcount;
+        timeouts[i].fn = [&, i]() {
+          runtimeouts++;
+          LOG(INFO) << "Ran " << runtimeouts << " timeouts of " << timeoutcount;
+        };
+      };
+    }
+  }
+
+  LOG(INFO) << "RUNNING TEST";
+  eventBase.loop();
+
+  EXPECT_EQ(runtimeouts, timeoutcount);
 }

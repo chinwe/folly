@@ -16,11 +16,12 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-#include <gtest/gtest.h>
 #include <thread>
 
+#include <folly/Memory.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/Request.h>
+#include <folly/portability/GTest.h>
 
 using namespace folly;
 
@@ -56,8 +57,7 @@ TEST(RequestContext, SimpleTest) {
   EXPECT_EQ(nullptr, RequestContext::get()->getContextData("test"));
 
   RequestContext::get()->setContextData(
-    "test",
-    std::unique_ptr<TestData>(new TestData(10)));
+      "test", folly::make_unique<TestData>(10));
   base.runInEventBaseThread([&](){
       EXPECT_TRUE(RequestContext::get() != nullptr);
       auto data = dynamic_cast<TestData*>(
@@ -84,15 +84,15 @@ TEST(RequestContext, setIfAbsentTest) {
   EXPECT_TRUE(RequestContext::get() != nullptr);
 
   RequestContext::get()->setContextData(
-      "test", std::unique_ptr<TestData>(new TestData(10)));
+      "test", folly::make_unique<TestData>(10));
   EXPECT_FALSE(RequestContext::get()->setContextDataIfAbsent(
-      "test", std::unique_ptr<TestData>(new TestData(20))));
+      "test", folly::make_unique<TestData>(20)));
   EXPECT_EQ(10,
             dynamic_cast<TestData*>(
                 RequestContext::get()->getContextData("test"))->data_);
 
   EXPECT_TRUE(RequestContext::get()->setContextDataIfAbsent(
-      "test2", std::unique_ptr<TestData>(new TestData(20))));
+      "test2", folly::make_unique<TestData>(20)));
   EXPECT_EQ(20,
             dynamic_cast<TestData*>(
                 RequestContext::get()->getContextData("test2"))->data_);
@@ -104,13 +104,13 @@ TEST(RequestContext, setIfAbsentTest) {
 TEST(RequestContext, testSetUnset) {
   RequestContext::create();
   auto ctx1 = RequestContext::saveContext();
-  ctx1->setContextData("test", std::unique_ptr<TestData>(new TestData(10)));
+  ctx1->setContextData("test", folly::make_unique<TestData>(10));
   auto testData1 = dynamic_cast<TestData*>(ctx1->getContextData("test"));
 
   // Override RequestContext
   RequestContext::create();
   auto ctx2 = RequestContext::saveContext();
-  ctx2->setContextData("test", std::unique_ptr<TestData>(new TestData(20)));
+  ctx2->setContextData("test", folly::make_unique<TestData>(20));
   auto testData2 = dynamic_cast<TestData*>(ctx2->getContextData("test"));
 
   // Check ctx1->onUnset was called
@@ -130,10 +130,24 @@ TEST(RequestContext, testSetUnset) {
   EXPECT_EQ(1, testData2->unset_);
 }
 
-int main(int argc, char** argv) {
-  testing::InitGoogleTest(&argc, argv);
-  google::InitGoogleLogging(argv[0]);
-  google::ParseCommandLineFlags(&argc, &argv, true);
+TEST(RequestContext, deadlockTest) {
+  class DeadlockTestData : public RequestData {
+   public:
+    explicit DeadlockTestData(const std::string& val) : val_(val) {}
 
-  return RUN_ALL_TESTS();
+    virtual ~DeadlockTestData() {
+      RequestContext::get()->setContextData(
+          val_, folly::make_unique<TestData>(1));
+    }
+
+    void onSet() override {}
+
+    void onUnset() override {}
+
+    std::string val_;
+  };
+
+  RequestContext::get()->setContextData(
+      "test", folly::make_unique<DeadlockTestData>("test2"));
+  RequestContext::get()->clearContextData("test");
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,7 +23,6 @@
 // worked as intended.
 
 #include <sys/types.h>
-#include <sys/stat.h>
 #include <fcntl.h>
 #include <signal.h>
 
@@ -60,7 +59,7 @@ void runChild(const char* file) {
   CHECK_ERR(creat(file, 0600));
 }
 
-void runParent(const char* file) {
+[[noreturn]] void runParent(const char* file) {
   std::vector<std::string> args {"/proc/self/exe", "--child", file};
   Subprocess proc(
       args,

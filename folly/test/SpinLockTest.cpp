@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,14 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/SpinLock.h>
 
 #include <folly/Random.h>
 
-#include <gtest/gtest.h>
 #include <thread>
 
 #include <folly/portability/Asm.h>
+#include <folly/portability/GTest.h>
 
 using folly::SpinLockGuardImpl;
 
@@ -45,8 +46,8 @@ void spinlockTestThread(LockedVal<LOCK>* v) {
     SpinLockGuardImpl<LOCK> g(v->lock);
 
     int first = v->ar[0];
-    for (size_t i = 1; i < sizeof v->ar / sizeof i; ++i) {
-      EXPECT_EQ(first, v->ar[i]);
+    for (size_t j = 1; j < sizeof v->ar / sizeof j; ++j) {
+      EXPECT_EQ(first, v->ar[j]);
     }
 
     int byte = folly::Random::rand32(rng);
@@ -67,16 +68,19 @@ template <typename LOCK>
 void trylockTestThread(TryLockState<LOCK>* state, size_t count) {
   while (true) {
     folly::asm_pause();
+    bool ret = state->lock2.try_lock();
     SpinLockGuardImpl<LOCK> g(state->lock1);
     if (state->obtained >= count) {
+      if (ret) {
+        state->lock2.unlock();
+      }
       break;
     }
 
-    bool ret = state->lock2.trylock();
-    EXPECT_NE(state->locked, ret);
 
     if (ret) {
       // We got lock2.
+      EXPECT_NE(state->locked, ret);
       ++state->obtained;
       state->locked = true;
 
@@ -132,36 +136,9 @@ void trylockTest() {
 
 } // unnamed namespace
 
-#if __x86_64__
-TEST(SpinLock, MslCorrectness) {
-  correctnessTest<folly::SpinLockMslImpl>();
+TEST(SpinLock, Correctness) {
+  correctnessTest<folly::SpinLock>();
 }
-TEST(SpinLock, MslTryLock) {
-  trylockTest<folly::SpinLockMslImpl>();
-}
-#endif
-
-#if __APPLE__
-TEST(SpinLock, AppleCorrectness) {
-  correctnessTest<folly::SpinLockAppleImpl>();
-}
-TEST(SpinLock, AppleTryLock) {
-  trylockTest<folly::SpinLockAppleImpl>();
-}
-#endif
-
-#if FOLLY_HAVE_PTHREAD_SPINLOCK_T
-TEST(SpinLock, PthreadCorrectness) {
-  correctnessTest<folly::SpinLockPthreadImpl>();
-}
-TEST(SpinLock, PthreadTryLock) {
-  trylockTest<folly::SpinLockPthreadImpl>();
-}
-#endif
-
-TEST(SpinLock, MutexCorrectness) {
-  correctnessTest<folly::SpinLockPthreadMutexImpl>();
-}
-TEST(SpinLock, MutexTryLock) {
-  trylockTest<folly::SpinLockPthreadMutexImpl>();
+TEST(SpinLock, TryLock) {
+  trylockTest<folly::SpinLock>();
 }

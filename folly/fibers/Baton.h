@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -154,7 +154,7 @@ class Baton {
     PreBlockAttempts = 300,
   };
 
-  explicit Baton(intptr_t state) : waitingFiber_(state){};
+  explicit Baton(intptr_t state) : waitingFiber_(state){}
 
   void postHelper(intptr_t new_value);
   void postThread();

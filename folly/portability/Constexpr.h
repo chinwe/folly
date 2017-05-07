@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,14 +22,20 @@
 
 namespace folly {
 
+// TLDR: Prefer using operator< for ordering. And when
+// a and b are equivalent objects, we return b to make
+// sorting stable.
+// See http://stepanovpapers.com/notes.pdf for details.
 template <typename T>
 constexpr T constexpr_max(T a, T b) {
-  return a > b ? a : b;
+  return b < a ? a : b;
 }
 
+// When a and b are equivalent objects, we return a to
+// make sorting stable.
 template <typename T>
 constexpr T constexpr_min(T a, T b) {
-  return a < b ? a : b;
+  return b < a ? b : a;
 }
 
 namespace detail {
@@ -64,10 +70,10 @@ struct constexpr_abs_helper<
         std::is_integral<T>::value && !std::is_same<T, bool>::value &&
         std::is_signed<T>::value>::type> {
   static constexpr typename std::make_unsigned<T>::type go(T t) {
-    return t < static_cast<T>(0) ? -t : t;
+    return typename std::make_unsigned<T>::type(t < static_cast<T>(0) ? -t : t);
   }
 };
-}
+} // namespace detail
 
 template <typename T>
 constexpr auto constexpr_abs(T t)
@@ -75,19 +81,27 @@ constexpr auto constexpr_abs(T t)
   return detail::constexpr_abs_helper<T>::go(t);
 }
 
-#ifdef _MSC_VER
-constexpr size_t constexpr_strlen_internal(const char* s, size_t len) {
-  return *s == '\0' ? len : constexpr_strlen_internal(s + 1, len + 1);
+namespace detail {
+
+template <typename Char>
+constexpr size_t constexpr_strlen_internal(const Char* s, size_t len) {
+  return *s == Char(0) ? len : constexpr_strlen_internal(s + 1, len + 1);
 }
 static_assert(constexpr_strlen_internal("123456789", 0) == 9,
               "Someone appears to have broken constexpr_strlen...");
-#endif
+} // namespace detail
 
+template <typename Char>
+constexpr size_t constexpr_strlen(const Char* s) {
+  return detail::constexpr_strlen_internal(s, 0);
+}
+
+template <>
 constexpr size_t constexpr_strlen(const char* s) {
 #if defined(__clang__)
   return __builtin_strlen(s);
 #elif defined(_MSC_VER)
-  return s == nullptr ? 0 : constexpr_strlen_internal(s, 0);
+  return detail::constexpr_strlen_internal(s, 0);
 #else
   return std::strlen(s);
 #endif

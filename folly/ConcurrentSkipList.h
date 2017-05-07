@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -195,7 +195,7 @@ class ConcurrentSkipList {
   //===================================================================
 
   ~ConcurrentSkipList() {
-    /* static */ if (NodeType::template destroyIsNoOp<NodeAlloc>()) {
+    /* static */ if (NodeType::template DestroyIsNoOp<NodeAlloc>::value) {
       // Avoid traversing the list if using arena allocator.
       return;
     }
@@ -328,9 +328,9 @@ class ConcurrentSkipList {
       // locks acquired and all valid, need to modify the links under the locks.
       newNode =
         NodeType::create(recycler_.alloc(), nodeHeight, std::forward<U>(data));
-      for (int layer = 0; layer < nodeHeight; ++layer) {
-        newNode->setSkip(layer, succs[layer]);
-        preds[layer]->setSkip(layer, newNode);
+      for (int k = 0; k < nodeHeight; ++k) {
+        newNode->setSkip(k, succs[k]);
+        preds[k]->setSkip(k, newNode);
       }
 
       newNode->setFullyLinked();
@@ -378,8 +378,8 @@ class ConcurrentSkipList {
         continue;  // this will unlock all the locks
       }
 
-      for (int layer = nodeHeight - 1; layer >= 0; --layer) {
-        preds[layer]->setSkip(layer, nodeToDelete->skip(layer));
+      for (int k = nodeHeight - 1; k >= 0; --k) {
+        preds[k]->setSkip(k, nodeToDelete->skip(k));
       }
 
       incrementSize(-1);
@@ -679,7 +679,7 @@ class detail::csl_iterator :
   friend class boost::iterator_core_access;
   template<class,class> friend class csl_iterator;
 
-  void increment() { node_ = node_->next(); };
+  void increment() { node_ = node_->next(); }
   bool equal(const csl_iterator& other) const { return node_ == other.node_; }
   value_type& dereference() const { return node_->data(); }
 
@@ -718,7 +718,7 @@ class ConcurrentSkipList<T, Comp, NodeAlloc, MAX_HEIGHT>::Skipper {
     }
     int max_layer = maxLayer();
     for (int i = 0; i < max_layer; ++i) {
-      hints_[i] = i + 1;
+      hints_[i] = uint8_t(i + 1);
     }
     hints_[max_layer] = max_layer;
   }

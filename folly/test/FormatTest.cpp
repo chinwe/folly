@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Facebook, Inc.
+ * Copyright 2017 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 #include <folly/Format.h>
 
-#include <gtest/gtest.h>
+#include <folly/portability/GTest.h>
 
 #include <string>
 
@@ -126,20 +126,22 @@ TEST(Format, Simple) {
   EXPECT_EQ("0042", sformat("{0[3]:04}", defaulted(v2, 42)));
   EXPECT_EQ("0042", svformat("{3:04}", defaulted(v2, 42)));
 
-  const int p[] = {10, 20, 30};
-  const int* q = p;
-  EXPECT_EQ("0020", sformat("{0[1]:04}", p));
-  EXPECT_EQ("0020", svformat("{1:04}", p));
-  EXPECT_EQ("0020", sformat("{0[1]:04}", q));
-  EXPECT_EQ("0020", svformat("{1:04}", q));
-  EXPECT_NE("", sformat("{}", q));
+  {
+    const int p[] = { 10, 20, 30 };
+    const int* q = p;
+    EXPECT_EQ("0020", sformat("{0[1]:04}", p));
+    EXPECT_EQ("0020", svformat("{1:04}", p));
+    EXPECT_EQ("0020", sformat("{0[1]:04}", q));
+    EXPECT_EQ("0020", svformat("{1:04}", q));
+    EXPECT_NE("", sformat("{}", q));
 
-  EXPECT_EQ("0x", sformat("{}", p).substr(0, 2));
-  EXPECT_EQ("10", svformat("{}", p));
-  EXPECT_EQ("0x", sformat("{}", q).substr(0, 2));
-  EXPECT_EQ("10", svformat("{}", q));
-  q = nullptr;
-  EXPECT_EQ("(null)", sformat("{}", q));
+    EXPECT_EQ("0x", sformat("{}", p).substr(0, 2));
+    EXPECT_EQ("10", svformat("{}", p));
+    EXPECT_EQ("0x", sformat("{}", q).substr(0, 2));
+    EXPECT_EQ("10", svformat("{}", q));
+    q = nullptr;
+    EXPECT_EQ("(null)", sformat("{}", q));
+  }
 
   std::map<int, std::string> m { {10, "hello"}, {20, "world"} };
   EXPECT_EQ("worldXX", sformat("{[20]:X<7}", m));

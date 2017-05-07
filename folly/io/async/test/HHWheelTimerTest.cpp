@@ -20,9 +20,7 @@
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/test/UndelayedDestruction.h>
 #include <folly/io/async/test/Util.h>
-
-#include <gtest/gtest.h>
-#include <vector>
+#include <folly/portability/GTest.h>
 
 using namespace folly;
 using std::chrono::milliseconds;
@@ -58,11 +56,9 @@ class TestTimeout : public HHWheelTimer::Callback {
 
 class TestTimeoutDelayed : public TestTimeout {
  protected:
-    std::chrono::milliseconds getCurTime() override {
-      return std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()) -
-        milliseconds(5);
-    }
+  std::chrono::steady_clock::time_point getCurTime() override {
+    return std::chrono::steady_clock::now() - milliseconds(5);
+  }
 };
 
 struct HHWheelTimerTest : public ::testing::Test {
